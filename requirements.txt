@@ -1,0 +1,5 @@
+ryu>=4.34
+web3>=6.11.0
+scapy>=2.5.0
+python-dotenv>=1.0.0
+py-solc-x>=1.1.1
