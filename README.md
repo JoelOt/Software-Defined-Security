@@ -96,33 +96,35 @@ python3 deploy.py
 Launch the symmetric controller for both domains.
 ```bash
 # Terminal 3 (Controller A)
-ryu-manager sdn/federated_controller.py
+PYTHONPATH=. ryu-manager sdn/federated_controller.py
 
 # Terminal 4 (Controller B)
 # If testing on the same machine, use the secondary port defined in your .env
-ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6653
+PYTHONPATH=. ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6653
 ```
 
 ### Step 3: Establish the Data Plane (Mininet)
 Launch the dynamic topologies. Mininet must be running before the tunnel can be created because it creates the OVS switch instances.
+If running both domains on the same VM, provide the `--domain-code` parameter to prevent virtual interface overlaps (e.g., `ha1-eth0` vs `hb1-eth0`).
 ```bash
 # Terminal 5 (Domain A): 10 hosts starting at 10.0.1.1
 # Note: use `sudo -E` to preserve your environment variables (like .env config)
-sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24
+sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24 --domain-code a
 
 # Terminal 6 (Domain B): 5 hosts starting at 10.0.2.1
-sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24
+sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24 --domain-code b
 ```
 
 ### Step 4: Establish the Federation Tunnel
 The tunnel script connects the two OVS switches via GRE. This must be executed bidirectionally on both VMs (or on the same VM if testing locally).
+*Note: Because we used `--domain-code`, the switch names are `sa` and `sb` instead of `s1`.*
 ```bash
 # Terminal 7 (Domain A -> Domain B)
 # Usage: ./federation_tunnel.sh <LOCAL_VM_IP> <REMOTE_VM_IP> <OVS_SWITCH_NAME>
-sudo bash network/federation_tunnel.sh 192.168.1.10 192.168.1.11 s1
+sudo bash network/federation_tunnel.sh 192.168.1.10 192.168.1.11 sa
 
 # Terminal 8 (Domain B -> Domain A)
-sudo bash network/federation_tunnel.sh 192.168.1.11 192.168.1.10 s1
+sudo bash network/federation_tunnel.sh 192.168.1.11 192.168.1.10 sb
 ```
 
 ### Step 5: Distributed Attack Simulation

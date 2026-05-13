@@ -1,66 +1,107 @@
 #!/bin/bash
 
 # -----------------------------------------------------------------------------
-# Federated SDN Project: GRE Tunnel Setup Script
+# Federated SDN Project: Federation Tunnel Setup Script
 # Architecture: Data Plane
 # Description: Connects the local Mininet OVS instance to a remote OVS instance 
-#              via a GRE tunnel to establish the federated network.
+#              via a GRE tunnel, OR creates a local patch port if both domains 
+#              are on the same VM.
 # -----------------------------------------------------------------------------
 
 set -e
 
 # Basic error handling for arguments
-if [ "$#" -ne 3 ]; then
+if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
     echo "Error: Incorrect number of arguments."
-    echo "Usage: $0 <LOCAL_VM_IP> <REMOTE_VM_IP> <OVS_SWITCH_NAME>"
-    echo "Example: $0 192.168.1.10 192.168.1.11 s1"
+    echo "Usage (Different VMs): $0 <LOCAL_VM_IP> <REMOTE_VM_IP> <LOCAL_OVS_SWITCH>"
+    echo "Usage (Same VM):       $0 <LOCAL_VM_IP> <LOCAL_VM_IP> <LOCAL_OVS_SWITCH> <REMOTE_OVS_SWITCH>"
+    echo "Example (GRE):   $0 192.168.1.10 192.168.1.11 sa"
+    echo "Example (Patch): $0 127.0.0.1 127.0.0.1 sa sb"
     exit 1
 fi
 
 LOCAL_VM_IP=$1
 REMOTE_VM_IP=$2
-OVS_SWITCH_NAME=$3
-TUNNEL_NAME="gre-$OVS_SWITCH_NAME"
+LOCAL_OVS_SWITCH=$3
+REMOTE_OVS_SWITCH=$4
 
 echo "=========================================="
-echo " Initiating Federated GRE Tunnel Setup"
+echo " Initiating Federation Tunnel Setup"
 echo "=========================================="
-echo "Local VM IP:    $LOCAL_VM_IP"
-echo "Remote VM IP:   $REMOTE_VM_IP"
-echo "OVS Switch:     $OVS_SWITCH_NAME"
-echo "Tunnel Name:    $TUNNEL_NAME"
-echo "=========================================="
+echo "Local VM IP:      $LOCAL_VM_IP"
+echo "Remote VM IP:     $REMOTE_VM_IP"
+echo "Local OVS Switch: $LOCAL_OVS_SWITCH"
 
-# Check if the OVS switch exists
-if ! ovs-vsctl list-br | grep -q -w "$OVS_SWITCH_NAME"; then
-    echo "Error: Open vSwitch '$OVS_SWITCH_NAME' does not exist. Please create the Mininet topology first."
-    exit 1
+if [ "$LOCAL_VM_IP" == "$REMOTE_VM_IP" ]; then
+    # Same VM scenario - use patch ports
+    echo "Mode:             Local Patch Port"
+    if [ -z "$REMOTE_OVS_SWITCH" ]; then
+        echo "=========================================="
+        echo "Error: For same-VM setup, please provide the remote OVS switch name as the 4th argument."
+        echo "Example: $0 $LOCAL_VM_IP $LOCAL_VM_IP $LOCAL_OVS_SWITCH sb"
+        exit 1
+    fi
+    echo "Remote OVS Switch: $REMOTE_OVS_SWITCH"
+    echo "=========================================="
+
+    # Check if switches exist
+    for SWITCH in "$LOCAL_OVS_SWITCH" "$REMOTE_OVS_SWITCH"; do
+        if ! ovs-vsctl list-br | grep -q -w "$SWITCH"; then
+            echo "Error: Open vSwitch '$SWITCH' does not exist. Please create the Mininet topology first."
+            exit 1
+        fi
+    done
+
+    PATCH_LOCAL="patch-$REMOTE_OVS_SWITCH"
+    PATCH_REMOTE="patch-$LOCAL_OVS_SWITCH"
+
+    echo "[*] Cleaning up existing patch ports if any..."
+    ovs-vsctl --if-exists del-port "$LOCAL_OVS_SWITCH" "$PATCH_LOCAL"
+    ovs-vsctl --if-exists del-port "$REMOTE_OVS_SWITCH" "$PATCH_REMOTE"
+
+    echo "[*] Creating patch port on '$LOCAL_OVS_SWITCH' connected to '$REMOTE_OVS_SWITCH'..."
+    ovs-vsctl add-port "$LOCAL_OVS_SWITCH" "$PATCH_LOCAL" -- set interface "$PATCH_LOCAL" type=patch options:peer="$PATCH_REMOTE"
+
+    echo "[*] Creating patch port on '$REMOTE_OVS_SWITCH' connected to '$LOCAL_OVS_SWITCH'..."
+    ovs-vsctl add-port "$REMOTE_OVS_SWITCH" "$PATCH_REMOTE" -- set interface "$PATCH_REMOTE" type=patch options:peer="$PATCH_LOCAL"
+
+    echo "[+] Successfully established patch cable between $LOCAL_OVS_SWITCH and $REMOTE_OVS_SWITCH."
+    echo "[!] Note: Patch port setup is bidirectional. You only need to run this script once!"
+    echo "=========================================="
+
+else
+    # Different VM scenario - use GRE tunnel
+    echo "Mode:             GRE Tunnel"
+    echo "=========================================="
+    
+    TUNNEL_NAME="gre-$LOCAL_OVS_SWITCH"
+
+    if ! ovs-vsctl list-br | grep -q -w "$LOCAL_OVS_SWITCH"; then
+        echo "Error: Open vSwitch '$LOCAL_OVS_SWITCH' does not exist. Please create the Mininet topology first."
+        exit 1
+    fi
+
+    echo "[*] Checking for existing tunnel interface '$TUNNEL_NAME'..."
+    if ip link show "$TUNNEL_NAME" > /dev/null 2>&1; then
+        echo "[!] Tunnel interface '$TUNNEL_NAME' already exists. Recreating..."
+        ip link set "$TUNNEL_NAME" down
+        ip tunnel del "$TUNNEL_NAME"
+    fi
+
+    if ovs-vsctl list-ports "$LOCAL_OVS_SWITCH" | grep -q -w "$TUNNEL_NAME"; then
+        echo "[!] Removing existing port '$TUNNEL_NAME' from Open vSwitch '$LOCAL_OVS_SWITCH'..."
+        ovs-vsctl del-port "$LOCAL_OVS_SWITCH" "$TUNNEL_NAME"
+    fi
+
+    echo "[*] Creating GRE tunnel interface '$TUNNEL_NAME' from $LOCAL_VM_IP to $REMOTE_VM_IP..."
+    ip tunnel add "$TUNNEL_NAME" mode gre remote "$REMOTE_VM_IP" local "$LOCAL_VM_IP" ttl 255
+
+    echo "[*] Bringing up the GRE tunnel interface '$TUNNEL_NAME'..."
+    ip link set "$TUNNEL_NAME" up
+
+    echo "[*] Attaching GRE tunnel interface '$TUNNEL_NAME' to Open vSwitch '$LOCAL_OVS_SWITCH'..."
+    ovs-vsctl add-port "$LOCAL_OVS_SWITCH" "$TUNNEL_NAME"
+
+    echo "[+] Successfully established GRE tunnel and attached it to $LOCAL_OVS_SWITCH."
+    echo "=========================================="
 fi
-
-echo "[*] Checking for existing tunnel interface '$TUNNEL_NAME'..."
-# Clean up existing tunnel with the same name if it exists
-if ip link show "$TUNNEL_NAME" > /dev/null 2>&1; then
-    echo "[!] Tunnel interface '$TUNNEL_NAME' already exists. Recreating..."
-    ip link set "$TUNNEL_NAME" down
-    ip tunnel del "$TUNNEL_NAME"
-fi
-
-# Clean up port from OVS if it exists
-if ovs-vsctl list-ports "$OVS_SWITCH_NAME" | grep -q -w "$TUNNEL_NAME"; then
-    echo "[!] Removing existing port '$TUNNEL_NAME' from Open vSwitch '$OVS_SWITCH_NAME'..."
-    ovs-vsctl del-port "$OVS_SWITCH_NAME" "$TUNNEL_NAME"
-fi
-
-echo "[*] Creating GRE tunnel interface '$TUNNEL_NAME' from $LOCAL_VM_IP to $REMOTE_VM_IP..."
-# 3. Create a GRE tunnel interface bridging the local host to the remote host
-ip tunnel add "$TUNNEL_NAME" mode gre remote "$REMOTE_VM_IP" local "$LOCAL_VM_IP" ttl 255
-
-echo "[*] Bringing up the GRE tunnel interface '$TUNNEL_NAME'..."
-ip link set "$TUNNEL_NAME" up
-
-echo "[*] Attaching GRE tunnel interface '$TUNNEL_NAME' to Open vSwitch '$OVS_SWITCH_NAME'..."
-# 4. Attach the GRE interface to the specified Open vSwitch
-ovs-vsctl add-port "$OVS_SWITCH_NAME" "$TUNNEL_NAME"
-
-echo "[+] Successfully established GRE tunnel and attached it to $OVS_SWITCH_NAME."
-echo "=========================================="

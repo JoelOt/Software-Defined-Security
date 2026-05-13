@@ -17,7 +17,7 @@ from mininet.cli import CLI
 from mininet.log import setLogLevel, info
 
 
-def create_topology(num_hosts: int, base_ip: str, controller_ip: str):
+def create_topology(num_hosts: int, base_ip: str, controller_ip: str, domain_code: str = ''):
     """
     Role: Data Plane
     Dynamically generates the Mininet topology, assigning IPs to standard hosts
@@ -33,7 +33,8 @@ def create_topology(num_hosts: int, base_ip: str, controller_ip: str):
 
     info('*** Adding switch\n')
     # Explicitly enforce OpenFlow 1.3 protocol as per architectural rules
-    s1 = net.addSwitch('s1', protocols='OpenFlow13')
+    s_name = f's{domain_code}' if domain_code else 's1'
+    s1 = net.addSwitch(s_name, protocols='OpenFlow13')
 
     info('*** Adding hosts\n')
     network = ipaddress.IPv4Network(base_ip, strict=False)
@@ -43,7 +44,8 @@ def create_topology(num_hosts: int, base_ip: str, controller_ip: str):
         try:
             ip_obj = next(hosts_iterator)
             ip_str = f"{ip_obj}/{network.prefixlen}"
-            host = net.addHost(f'h{i}', ip=ip_str)
+            h_name = f'h{domain_code}{i}' if domain_code else f'h{i}'
+            host = net.addHost(h_name, ip=ip_str)
             net.addLink(host, s1)
         except StopIteration:
             info(f'*** Warning: Not enough IPs in subnet for {num_hosts} hosts.\n')
@@ -53,10 +55,11 @@ def create_topology(num_hosts: int, base_ip: str, controller_ip: str):
     try:
         vnf_ip_obj = next(hosts_iterator)
         vnf_ip_str = f"{vnf_ip_obj}/{network.prefixlen}"
-        snort_vnf = net.addHost('snort_vnf', ip=vnf_ip_str)
+        vnf_name = f'snort{domain_code}' if domain_code else 'snort'
+        snort_vnf = net.addHost(vnf_name, ip=vnf_ip_str)
         net.addLink(snort_vnf, s1)
     except StopIteration:
-        info('*** Warning: Not enough IPs to assign to snort_vnf.\n')
+        info('*** Warning: Not enough IPs to assign to snort.\n')
 
     info('*** Starting network\n')
     net.build()
@@ -76,7 +79,8 @@ if __name__ == '__main__':
     parser.add_argument('--num-hosts', type=int, default=3, help='Number of client hosts')
     parser.add_argument('--base-ip', type=str, default='10.0.1.0/24', help='Base IP subnet (e.g., 10.0.1.0/24)')
     parser.add_argument('--controller-ip', type=str, default=os.environ.get('MININET_CONTROLLER_IP', '127.0.0.1'), help='Control Plane IP address')
+    parser.add_argument('--domain-code', type=str, default='', help='Domain identifier (e.g. "a" or "b") to prevent interface name overlap when running locally')
     
     args = parser.parse_args()
     
-    create_topology(args.num_hosts, args.base_ip, args.controller_ip)
+    create_topology(args.num_hosts, args.base_ip, args.controller_ip, args.domain_code)
