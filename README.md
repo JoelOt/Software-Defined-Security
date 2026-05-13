@@ -31,15 +31,47 @@ federated-quarantine-sdn/
 │   └── utils.py                   # Blockchain helper functions
 ├── network/
 │   ├── topology_setup.py          # Dynamic Mininet script
-│   └── federation_tunnel.sh       # GRE/VxLAN tunnel script
-├── vnfs/
-│   └── snort_config/               # IDS rules for quarantine zone
+│   └── federation_tunnel.sh       # GRE tunnel script
 ├── attacks/
 │   └── ddos_attack.py             # Scapy-based traffic generator
+├── .env.example                   # Environment variables template
+├── requirements.txt               # Python dependencies
 └── README.md
 ```
 
+## 🛠️ Prerequisites & Dependencies
+The following software must be installed on your systems (both VMs, if testing in a federated manner):
+*   **Python 3.10+**
+*   **Mininet & Open vSwitch (OVS)** (Data Plane)
+*   **Ryu SDN Framework** (Control Plane)
+*   **Go-Ethereum (Geth)** (Trust Plane)
+*   **Snort 3** (Security VNF)
+
+## ⚙️ Setup & Installation
+1.  **Clone the repository:**
+    ```bash
+    git clone <repository_url>
+    cd project/code
+    ```
+2.  **Create and activate a Python virtual environment:**
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+3.  **Install the required Python packages:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+4.  **Configure Environment Variables:**
+    Copy the provided example file to create your local `.env`:
+    ```bash
+    cp .env.example .env
+    ```
+    *Update the `.env` variables if necessary (e.g., set the `CONTRACT_ADDRESS` after deploying the smart contract).*
+
 ## 🚀 Execution Instructions
+
+*Note: In a true federated setup, Domain A and Domain B reside on different VMs. Adjust IP addresses according to your setup.*
 
 ### Step 1: Initialize the Trust Plane (Geth PoA)
 Initialize and start the private Go-Ethereum (Geth) network using Proof of Authority (Clique).
@@ -56,33 +88,44 @@ Deploy the Smart Contract:
 # Terminal 2
 cd blockchain/
 python3 deploy.py
-# Note the Contract Address and update sdn/utils.py
+# The deployment script automatically saves the address and ABI to contract_data.json. 
+# You can also manually add it to your .env file as CONTRACT_ADDRESS.
 ```
 
-### Step 2: Establish the Data Plane (Mininet)
-Set up the inter-VM tunnel and launch the dynamic topologies.
-```bash
-# Terminal 2: Run tunnel script
-sudo bash network/federation_tunnel.sh
-
-# Terminal 3 (Domain A): 10 hosts starting at 10.0.1.1
-sudo python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24
-
-# Terminal 4 (Domain B): 5 hosts starting at 10.0.2.1
-sudo python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24
-```
-
-### Step 3: Start the Control Plane (Ryu)
+### Step 2: Start the Control Plane (Ryu)
 Launch the symmetric controller for both domains.
 ```bash
-# Terminal 5 (Controller A)
-ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6633
+# Terminal 3 (Controller A)
+ryu-manager sdn/federated_controller.py
 
-# Terminal 6 (Controller B)
+# Terminal 4 (Controller B)
+# If testing on the same machine, use the secondary port defined in your .env
 ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6653
 ```
 
-### Step 4: Distributed Attack Simulation
+### Step 3: Establish the Data Plane (Mininet)
+Launch the dynamic topologies. Mininet must be running before the tunnel can be created because it creates the OVS switch instances.
+```bash
+# Terminal 5 (Domain A): 10 hosts starting at 10.0.1.1
+# Note: use `sudo -E` to preserve your environment variables (like .env config)
+sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24
+
+# Terminal 6 (Domain B): 5 hosts starting at 10.0.2.1
+sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24
+```
+
+### Step 4: Establish the Federation Tunnel
+The tunnel script connects the two OVS switches via GRE. This must be executed bidirectionally on both VMs (or on the same VM if testing locally).
+```bash
+# Terminal 7 (Domain A -> Domain B)
+# Usage: ./federation_tunnel.sh <LOCAL_VM_IP> <REMOTE_VM_IP> <OVS_SWITCH_NAME>
+sudo bash network/federation_tunnel.sh 192.168.1.10 192.168.1.11 s1
+
+# Terminal 8 (Domain B -> Domain A)
+sudo bash network/federation_tunnel.sh 192.168.1.11 192.168.1.10 s1
+```
+
+### Step 5: Distributed Attack Simulation
 Simulate a botnet by launching the attack from multiple hosts in Domain A targeting Domain B.
 ```text
 mininet-A> h1 python3 attacks/ddos_attack.py --target 10.0.2.10 & h2 python3 attacks/ddos_attack.py --target 10.0.2.10 & h3 python3 attacks/ddos_attack.py --target 10.0.2.10 &
