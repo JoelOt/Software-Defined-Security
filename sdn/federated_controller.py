@@ -11,7 +11,7 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ether_types, ipv4
 from ryu.lib import hub
 
-from sdn.utils import DLTManager
+from sdn.utils import DLTManager, TestDLTManager
 
 SNORT_PORT = 3
 LOCAL_SUBNET_PREFIX = "10."
@@ -38,7 +38,10 @@ class FederatedController(app_manager.RyuApp):
         self.dropped_ips = set()
         
         # 1. Initialize DLT Manager
-        self.dlt_manager = DLTManager()
+        if os.environ.get('USE_TEST_DLT', '0') == '1':
+            self.dlt_manager = TestDLTManager()
+        else:
+            self.dlt_manager = DLTManager()
         
         # 2. Start DLT event listener non-blocking thread
         self.dlt_manager.start_event_listener(self._dlt_event_callback)
@@ -159,7 +162,7 @@ class FederatedController(app_manager.RyuApp):
         dpid = datapath.id
         current_time = time.time()
 
-        for stat in sorted([flow for flow in body if flow.priority == 1], key=lambda flow: (flow.match.get('in_port'), flow.match.get('ipv4_src'))):
+        for stat in sorted([flow for flow in body if flow.priority == 1], key=lambda flow: (flow.match.get('in_port', 0), flow.match.get('ipv4_src', ''))):
             ipv4_src = stat.match.get('ipv4_src')
             if not ipv4_src:
                 continue

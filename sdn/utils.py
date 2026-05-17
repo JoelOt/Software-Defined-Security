@@ -133,3 +133,53 @@ class DLTManager:
                 
         except Exception as e:
             self.logger.error("Failed to initialize event filters: %s", e)
+
+
+class TestDLTManager:
+    """
+    Mock DLT Manager for testing without a real Geth network.
+    Implements the same interface as DLTManager but only logs actions.
+    It can also simulate DLT events triggering back to the controller.
+    """
+    def __init__(self):
+        self.logger = logging.getLogger('TestDLTManager')
+        self.logger.setLevel(logging.INFO)
+        self.logger.info("Initialized TestDLTManager (Mock Mode).")
+        self.callback = None
+
+    def publish_threat(self, ip_address):
+        self.logger.info("MOCK: Publishing threat for IP: %s", ip_address)
+        # Simulate network delay then fire event
+        hub.spawn(self._mock_publish_delay, ip_address)
+
+    def _mock_publish_delay(self, ip_address):
+        hub.sleep(1)
+        self.logger.info("MOCK: Threat published. Tx Hash: 0xmockhash123")
+        if self.callback:
+            # Simulate a ThreatReported event
+            class MockEvent:
+                def __init__(self, event_name, ip):
+                    self.event = event_name
+                    self.args = {'ipAddress': ip}
+            
+            # Fire the event callback so the other controllers (or this one) can react
+            hub.spawn(self.callback, MockEvent('ThreatReported', ip_address))
+
+    def update_threat_status(self, ip_address, status_int):
+        self.logger.info("MOCK: Updating threat status for IP: %s to %s", ip_address, status_int)
+        hub.spawn(self._mock_update_delay, ip_address, status_int)
+
+    def _mock_update_delay(self, ip_address, status_int):
+        hub.sleep(1)
+        self.logger.info("MOCK: Status updated. Tx Hash: 0xmockhash456")
+        if self.callback:
+            class MockEvent:
+                def __init__(self, event_name, ip, status):
+                    self.event = event_name
+                    self.args = {'ipAddress': ip, 'status': status}
+                    
+            hub.spawn(self.callback, MockEvent('StatusUpdated', ip_address, status_int))
+
+    def start_event_listener(self, callback_func):
+        self.logger.info("MOCK: Starting DLT event listener loop...")
+        self.callback = callback_func
