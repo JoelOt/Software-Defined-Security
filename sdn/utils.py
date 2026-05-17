@@ -170,7 +170,7 @@ class TestDLTManager:
         hub.spawn(self._mock_update_delay, ip_address, status_int)
 
     def _mock_update_delay(self, ip_address, status_int):
-        hub.sleep(1)
+        hub.sleep(10)
         self.logger.info("MOCK: Status updated. Tx Hash: 0xmockhash456")
         if self.callback:
             class MockEvent:

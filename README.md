@@ -94,13 +94,16 @@ python3 deploy.py
 
 ### Step 2: Start the Control Plane (Ryu)
 Launch the symmetric controller for both domains.
-```bash
-# Terminal 3 (Controller A)
-PYTHONPATH=. ryu-manager sdn/federated_controller.py
 
-# Terminal 4 (Controller B)
-# If testing on the same machine, use the secondary port defined in your .env
-PYTHONPATH=. ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6653
+*Note: If you have not initialized the Geth trust plane, you can run the controllers in mock mode by prefixing the commands with `USE_TEST_DLT=1`.*
+
+```bash
+# Terminal 3 (Controller A - Source Domain)
+LOCAL_SUBNET_PREFIX="10.0.1." PYTHONPATH=. ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6633
+
+# Terminal 4 (Controller B - Victim Domain)
+# If testing on the same machine, use a secondary port (e.g., 6653)
+LOCAL_SUBNET_PREFIX="10.0.2." PYTHONPATH=. ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6653
 ```
 
 ### Step 3: Establish the Data Plane (Mininet)
@@ -109,10 +112,10 @@ If running both domains on the same VM, provide the `--domain-code` parameter to
 ```bash
 # Terminal 5 (Domain A): 10 hosts starting at 10.0.1.1
 # Note: use `sudo -E` to preserve your environment variables (like .env config)
-sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24 --domain-code a
+sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24 --domain-code a --controller-port 6633
 
 # Terminal 6 (Domain B): 5 hosts starting at 10.0.2.1
-sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24 --domain-code b
+sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24 --domain-code b --controller-port 6653
 ```
 
 ### Step 4: Establish the Federation Tunnel
