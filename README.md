@@ -116,15 +116,24 @@ sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24 --
 ```
 
 ### Step 4: Establish the Federation Tunnel
-The tunnel script connects the two OVS switches via GRE. This must be executed bidirectionally on both VMs (or on the same VM if testing locally).
+The tunnel script connects the two OVS switches via GRE or local Patch Ports. This must be executed bidirectionally on both VMs (or once on the same VM if testing locally).
 *Note: Because we used `--domain-code`, the switch names are `sa` and `sb` instead of `s1`.*
+
+**Option A: Different VMs (GRE Tunnel)**
 ```bash
 # Terminal 7 (Domain A -> Domain B)
-# Usage: ./federation_tunnel.sh <LOCAL_VM_IP> <REMOTE_VM_IP> <OVS_SWITCH_NAME>
 sudo bash network/federation_tunnel.sh 192.168.1.10 192.168.1.11 sa
 
 # Terminal 8 (Domain B -> Domain A)
 sudo bash network/federation_tunnel.sh 192.168.1.11 192.168.1.10 sb
+```
+
+**Option B: Same VM (Local Patch Port)**
+```bash
+# Terminal 7
+# Usage: ./federation_tunnel.sh <LOCAL_IP> <LOCAL_IP> <LOCAL_SWITCH> <REMOTE_SWITCH>
+# You only need to run this once!
+sudo bash network/federation_tunnel.sh 127.0.0.1 127.0.0.1 sa sb
 ```
 
 ### Step 5: Distributed Attack Simulation
