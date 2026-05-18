@@ -98,7 +98,31 @@ python3 deploy.py
 # You can also manually add it to your .env file as CONTRACT_ADDRESS.
 ```
 
-### Step 2: Start the Control Plane (Ryu)
+### Step 2: Establish the Data Plane (Mininet)
+Launch the dynamic topologies. Mininet must be running before the tunnel can be created because it creates the OVS switch instances.
+If running both domains on the same VM, provide the `--domain-code` parameter to prevent virtual interface overlaps (e.g., `ha1-eth0` vs `hb1-eth0`).
+```bash
+# Terminal 5 (Domain A): 10 hosts starting at 10.0.1.1
+# Note: use `sudo -E` to preserve your environment variables (like .env config)
+sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24 --domain-code a --controller-port 6633
+
+# Terminal 6 (Domain B): 5 hosts starting at 10.0.2.1
+sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24 --domain-code b --controller-port 6653
+```
+
+### Step 3: Start the Quarantine VNF (Snort)
+Launch Snort on the dummy interface attached to the source domain's switch. The start script auto-detects whether you have Snort 2 or 3 installed.
+```bash
+# Terminal 8 (Domain A - Source Domain)
+# Snort listens on the sa1-snort dummy interface for redirected attacker traffic
+sudo bash network/snort/start_snort.sh sa1
+```
+You can monitor alerts in real-time:
+```bash
+tail -f network/snort/logs/alert_fast.txt
+```
+
+### Step 4: Start the Control Plane (Ryu)
 Launch the symmetric controller for both domains.
 
 *Note: If you have not initialized the Geth trust plane, you can run the controllers in mock mode by prefixing the commands with `USE_TEST_DLT=1`.*
@@ -112,19 +136,7 @@ LOCAL_SUBNET_PREFIX="10.0.1." PYTHONPATH=. ryu-manager sdn/federated_controller.
 LOCAL_SUBNET_PREFIX="10.0.2." PYTHONPATH=. ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6653
 ```
 
-### Step 3: Establish the Data Plane (Mininet)
-Launch the dynamic topologies. Mininet must be running before the tunnel can be created because it creates the OVS switch instances.
-If running both domains on the same VM, provide the `--domain-code` parameter to prevent virtual interface overlaps (e.g., `ha1-eth0` vs `hb1-eth0`).
-```bash
-# Terminal 5 (Domain A): 10 hosts starting at 10.0.1.1
-# Note: use `sudo -E` to preserve your environment variables (like .env config)
-sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24 --domain-code a --controller-port 6633
-
-# Terminal 6 (Domain B): 5 hosts starting at 10.0.2.1
-sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24 --domain-code b --controller-port 6653
-```
-
-### Step 4: Establish the Federation Tunnel
+### Step 5: Establish the Federation Tunnel
 The tunnel script connects the two OVS switches via GRE or local Patch Ports. This must be executed bidirectionally on both VMs (or once on the same VM if testing locally).
 *Note: Because we used `--domain-code`, the switch names are `sa1` and `sb1` instead of `s1`.*
 
@@ -143,18 +155,6 @@ sudo bash network/federation_tunnel.sh 192.168.1.11 192.168.1.10 sb1
 # Usage: ./federation_tunnel.sh <LOCAL_IP> <LOCAL_IP> <LOCAL_SWITCH> <REMOTE_SWITCH>
 # You only need to run this once!
 sudo bash network/federation_tunnel.sh 127.0.0.1 127.0.0.1 sa1 sb1
-```
-
-### Step 5: Start the Quarantine VNF (Snort)
-Launch Snort on the dummy interface attached to the source domain's switch. The start script auto-detects whether you have Snort 2 or 3 installed.
-```bash
-# Terminal 8 (Domain A - Source Domain)
-# Snort listens on the sa1-snort dummy interface for redirected attacker traffic
-sudo bash network/snort/start_snort.sh sa1
-```
-You can monitor alerts in real-time:
-```bash
-tail -f network/snort/logs/alert_fast.txt
 ```
 
 ### Step 6: Distributed Attack Simulation

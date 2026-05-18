@@ -27,6 +27,21 @@ daq =
     }
 }
 
+-- Event filtering: rate-limit alert output to avoid log flooding
+-- The detection_filter in the rule still fires, but we only LOG once per
+-- source IP every 10 seconds. This keeps logs readable during a DDoS.
+event_filter =
+{
+    {
+        gid = 1,
+        sid = 1000001,
+        type = 'limit',
+        track = 'by_src',
+        count = 1,
+        seconds = 10
+    }
+}
+
 -- Alert configuration: fast alerts to log directory (specified via -l flag)
 alert_fast =
 {
