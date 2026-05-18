@@ -1,0 +1,96 @@
+services:
+  bootnode:
+    build:
+      context: dlt-node
+    container_name: bootnode
+    hostname: bootnode
+    env_file: .env
+    command: ./bootnode_start.sh
+    restart: always
+    networks:
+      dlt_network:
+        ipv4_address: ${BOOTNODE_IP}
+
+  node1:
+    build:
+      context: dlt-node
+    container_name: node1
+    hostname: node1
+    depends_on:
+      - bootnode
+    env_file: .env
+    command: ./node1_start.sh
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "3334:3334" # ws
+      - "8551:8551" # http
+    networks:
+      dlt_network:
+        ipv4_address: ${IP_NODE_1}
+
+  node2:
+    build:
+      context: dlt-node
+    container_name: node2
+    hostname: node2
+    depends_on:
+      - bootnode
+    env_file: .env
+    command: ./node2_start.sh
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "3335:3335" # ws
+      - "8552:8552" # http
+    networks:
+      dlt_network:
+        ipv4_address: ${IP_NODE_2}
+
+  node3:
+    build:
+      context: dlt-node
+    container_name: node3
+    hostname: node3
+    depends_on:
+      - bootnode
+    env_file: .env
+    command: ./node3_start.sh
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "3336:3336" # ws
+      - "8553:8553" # http
+    networks:
+      dlt_network:
+        ipv4_address: ${IP_NODE_3}
+
+  node4:
+    build:
+      context: dlt-node
+    container_name: node4
+    hostname: node4
+    depends_on:
+      - bootnode
+    env_file: .env
+    command: ./node4_start.sh
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "3337:3337" # ws
+      - "8554:8554" # http
+    networks:
+      dlt_network:
+        ipv4_address: ${IP_NODE_4}
+
+networks:
+  dlt_network:
+    name: dlt_network
+    ipam:
+      driver: default
+      config:
+        - subnet: ${DLT_SUBNET}

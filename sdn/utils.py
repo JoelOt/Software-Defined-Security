@@ -5,6 +5,8 @@ import json
 import os
 import logging
 from web3 import Web3
+from web3.middleware import geth_poa_middleware
+from solcx import compile_standard
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,44 +21,47 @@ class DLTManager:
         # Setup logger for the DLT Manager
         self.logger = logging.getLogger('DLTManager')
         self.logger.setLevel(logging.INFO)
-        
-        # 1. Connect to local Geth RPC
-        rpc_url = os.environ.get('DLT_RPC_URL', 'http://127.0.0.1:8545')
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url))
-        if not self.w3.is_connected():
-            self.logger.error("Failed to connect to the Ethereum node at %s", rpc_url)
-            return
-            
-        self.logger.info("Successfully connected to Ethereum node.")
-        
-        # Setup default account
-        if len(self.w3.eth.accounts) > 0:
-            self.account = self.w3.eth.accounts[0]
-            self.w3.eth.default_account = self.account
-        else:
-            self.logger.error("No accounts found on the Ethereum node.")
-            return
+        self.configured = False
+        self.w3 = None
+        self.contract = None
+        self.account = None
+        self.private_key = None
 
-        # 2. Load ABI and Contract Address
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        contract_data_path = os.path.join(base_dir, '..', 'blockchain', 'contract_data.json')
-        
+    def init_stats(self, info):
+        """
+        Initializes the manager with data provided by the NetworkOrchestrator via the API.
+        """
         try:
-            with open(contract_data_path, 'r') as f:
-                contract_data = json.load(f)
-                
-            env_contract = os.environ.get('CONTRACT_ADDRESS', '')
-            self.contract_address = env_contract if env_contract else contract_data['address']
-            self.abi = contract_data['abi']
+            self.account = info['address']
+            self.private_key = info['private_key']
+            self.w3 = Web3(Web3.HTTPProvider(info['eth_node']))
+            self.w3.middleware_onion.inject(geth_poa_middleware, layer=0)
             
-            # Initialize the contract instance
-            self.contract = self.w3.eth.contract(address=self.contract_address, abi=self.abi)
-            self.logger.info("Loaded ThreatIntel contract at %s", self.contract_address)
+            contract_name = info["contract_name"]
+            # Ensure we point to the blockchain folder where the .sol resides
+            contract_path = os.path.join('blockchain', 'dlt-network-docker', 'code', contract_name + ".sol")
             
-        except FileNotFoundError:
-            self.logger.error("Contract data file not found at %s. Ensure deploy.py has been run.", contract_data_path)
+            with open(contract_path, "r") as file:
+                source = file.read()
+            
+            compiled_sol = compile_standard(
+                {
+                    "language": "Solidity",
+                    "sources": {contract_path: {"content": source}},
+                    "settings": {"outputSelection": {"*": {"*": ["abi", "metadata"]}}},
+                },
+                solc_version="0.8.12",
+            )
+            
+            abi = json.loads(compiled_sol["contracts"][contract_path][contract_name]["metadata"])["output"]["abi"]
+            self.contract_address = Web3.to_checksum_address(info['contract_address'])
+            self.contract = self.w3.eth.contract(abi=abi, address=self.contract_address)
+            
+            self.logger.info("Successfully connected to node and loaded contract %s", contract_name)
+            self.configured = True
+
         except Exception as e:
-            self.logger.error("Error loading contract data: %s", e)
+            self.logger.error("Error initializing DLT Manager: %s", e)
 
     def publish_threat(self, ip_address):
         """
@@ -70,9 +75,19 @@ class DLTManager:
         Internal task to execute the transaction without blocking the main event loop.
         """
         try:
+            if not self.configured:
+                return
             self.logger.info("Publishing threat for IP: %s", ip_address)
-            # Send transaction using the default account
-            tx_hash = self.contract.functions.reportThreat(ip_address).transact({'from': self.account})
+            
+            nonce = self.w3.eth.get_transaction_count(self.account)
+            tx = self.contract.functions.reportThreat(ip_address).build_transaction({
+                'from': self.account,
+                'nonce': nonce,
+                'gasPrice': self.w3.eth.gas_price
+            })
+            signed_tx = self.w3.eth.account.sign_transaction(tx, private_key=self.private_key)
+            tx_hash = self.w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            
             self.logger.info("Threat published. Tx Hash: %s", tx_hash.hex())
         except Exception as e:
             self.logger.error("Failed to publish threat for %s: %s", ip_address, e)
@@ -89,8 +104,19 @@ class DLTManager:
         Internal task to execute the status update transaction.
         """
         try:
+            if not self.configured:
+                return
             self.logger.info("Updating threat status for IP: %s to %s", ip_address, status_int)
-            tx_hash = self.contract.functions.updateStatus(ip_address, status_int).transact({'from': self.account})
+            
+            nonce = self.w3.eth.get_transaction_count(self.account)
+            tx = self.contract.functions.updateStatus(ip_address, status_int).build_transaction({
+                'from': self.account,
+                'nonce': nonce,
+                'gasPrice': self.w3.eth.gas_price
+            })
+            signed_tx = self.w3.eth.account.sign_transaction(tx, private_key=self.private_key)
+            tx_hash = self.w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            
             self.logger.info("Status updated. Tx Hash: %s", tx_hash.hex())
         except Exception as e:
             self.logger.error("Failed to update status for %s: %s", ip_address, e)
@@ -109,6 +135,10 @@ class DLTManager:
         """
         self.logger.info("Starting DLT event listener loop...")
         try:
+            # Wait for the orchestrator to provide contract info
+            while not self.configured:
+                hub.sleep(1)
+                
             # Create event filters looking from the latest block
             threat_filter = self.contract.events.ThreatReported.create_filter(fromBlock='latest')
             status_filter = self.contract.events.StatusUpdated.create_filter(fromBlock='latest')

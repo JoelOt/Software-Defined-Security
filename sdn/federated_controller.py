@@ -1,6 +1,12 @@
 import os
+import sys
 import time
+import threading
 from dotenv import load_dotenv
+
+# Fix: Import SDN_api from hyphenated directory path
+sys.path.append(os.path.join(os.getcwd(), 'blockchain', 'dlt-network-docker', 'code'))
+import SDN_api
 
 load_dotenv()
 
@@ -40,11 +46,32 @@ class FederatedController(app_manager.RyuApp):
         # 1. Initialize DLT Manager
         self.dlt_manager = DLTManager()
         
+        # Start SDN API to receive DLT config from Orchestrator
+        self.api_port = int(os.environ.get('SDN_API_PORT', '5000'))
+        self.api_thread = threading.Thread(target=SDN_api.init, args=(self,), name="SDN_api_thread", daemon=True)
+        self.api_thread.start()
+        
         # 2. Start DLT event listener non-blocking thread
         self.dlt_manager.start_event_listener(self._dlt_event_callback)
         
         # 3. Start Telemetry monitor thread
         self.monitor_thread = hub.spawn(self._monitor)
+
+        # 4. Optional: Start a DLT Test thread if env var is set
+        if os.environ.get('DLT_TEST_MODE') == 'true':
+            hub.spawn(self._dlt_test_loop)
+
+    def _dlt_test_loop(self):
+        """
+        Periodically publishes a dummy threat to verify DLT production/consumption.
+        """
+        self.logger.info("[TEST] DLT Test Mode enabled. Waiting for config...")
+        while not self.dlt_manager.configured:
+            hub.sleep(1)
+        
+        self.logger.info("[TEST] Config received. Publishing dummy threat 10.0.0.99 in 5 seconds...")
+        hub.sleep(5)
+        self.dlt_manager.publish_threat("10.0.0.99")
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -59,6 +86,12 @@ class FederatedController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
+
+    def init_stats(self, info):
+        self.dlt_manager.init_stats(info)
+
+    def get_port_number(self):
+        return self.api_port
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None, hard_timeout=0, idle_timeout=0):
         """
@@ -204,7 +237,12 @@ class FederatedController(app_manager.RyuApp):
         """
         event_name = event.event
         args = event.args
-        attacker_ip = args.get('ipAddress')
+        # Use 'ip' to match the ThreatIntel.sol event parameter names
+        attacker_ip = args.get('ip')
+        
+        if attacker_ip is None:
+            self.logger.warning("[DLT EVENT] Received %s event but IP is None. Args: %s", event_name, args)
+            return
         
         if event_name == 'ThreatReported':
             self.logger.info("[DLT EVENT] ThreatReported (Pending) received for IP %s", attacker_ip)

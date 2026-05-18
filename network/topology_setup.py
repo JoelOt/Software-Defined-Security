@@ -33,7 +33,7 @@ def create_topology(num_hosts: int, base_ip: str, controller_ip: str, domain_cod
 
     info('*** Adding switch\n')
     # Explicitly enforce OpenFlow 1.3 protocol as per architectural rules
-    s_name = f's{domain_code}1' if domain_code else 's1'
+    s_name = f's{domain_code}' if domain_code else 's1'
     s1 = net.addSwitch(s_name, protocols='OpenFlow13')
 
     info('*** Adding hosts\n')
@@ -65,12 +65,6 @@ def create_topology(num_hosts: int, base_ip: str, controller_ip: str, domain_cod
     net.build()
     c0.start()
     s1.start([c0])
-
-    info('*** Configuring L3 routing bypass (Device Routes)\n')
-    for host in net.hosts:
-        # Allow L2 direct bridging to any other 10.x.x.x domain without a router
-        if host.defaultIntf():
-            host.cmd(f'ip route add 10.0.0.0/8 dev {host.defaultIntf().name}')
 
     info('*** Running CLI\n')
     CLI(net)
