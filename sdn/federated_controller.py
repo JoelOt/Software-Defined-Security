@@ -13,7 +13,7 @@ from ryu.lib import hub
 
 from sdn.utils import DLTManager, TestDLTManager
 
-SNORT_PORT = 3
+# Snort VNF port is discovered dynamically via OFPPortDescStatsReply
 LOCAL_SUBNET_PREFIX = os.environ.get('LOCAL_SUBNET_PREFIX', '10.0.1.')
 DROP_HARD_TIMEOUT = 60 # Drop for 60 seconds locally
 
@@ -29,6 +29,7 @@ class FederatedController(app_manager.RyuApp):
         super(FederatedController, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
         self.datapaths = {}
+        self.snort_ports = {}  # dpid -> port_no (discovered dynamically)
         
         self.logger.info("Initialized Controller for Domain Subnet: %s", LOCAL_SUBNET_PREFIX)
         
@@ -64,6 +65,25 @@ class FederatedController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
+
+        # Request port descriptions to discover the Snort VNF port dynamically
+        req = parser.OFPPortDescStatsRequest(datapath)
+        datapath.send_msg(req)
+
+    @set_ev_cls(ofp_event.EventOFPPortDescStatsReply, MAIN_DISPATCHER)
+    def port_desc_stats_reply_handler(self, ev):
+        """
+        Discovers the Snort VNF port by scanning OVS port names.
+        The topology attaches a dummy interface named '<switch>-snort'.
+        """
+        datapath = ev.msg.datapath
+        dpid = datapath.id
+        for port in ev.msg.body:
+            port_name = port.name.decode() if isinstance(port.name, bytes) else port.name
+            if port_name.endswith('-snort'):
+                self.snort_ports[dpid] = port.port_no
+                self.logger.info("[VNF] Snort VNF discovered on dpid=%s port=%d (name=%s)",
+                                 dpid, port.port_no, port_name)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None, hard_timeout=0, idle_timeout=0):
         """
@@ -249,14 +269,22 @@ class FederatedController(app_manager.RyuApp):
         self.logger.warning("[SFC] Attacker %s belongs to our domain! Triggering quarantine...", attacker_ip)
         
         for datapath in self.datapaths.values():
+            dpid = datapath.id
             parser = datapath.ofproto_parser
+            
+            # Guard: ensure Snort VNF port was discovered for this switch
+            snort_port = self.snort_ports.get(dpid)
+            if snort_port is None:
+                self.logger.error("[SFC] No Snort VNF port found for dpid=%s. Cannot quarantine.", dpid)
+                continue
             
             # Service Function Chaining (SFC): Redirect matching traffic to the Snort VNF
             match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=attacker_ip)
-            actions = [parser.OFPActionOutput(SNORT_PORT)]
+            actions = [parser.OFPActionOutput(snort_port)]
             self.add_flow(datapath, priority=200, match=match, actions=actions)
             
-        self.logger.info("[SFC] Traffic from %s successfully tunneled to Snort VNF (Port %d).", attacker_ip, SNORT_PORT)
+            self.logger.info("[SFC] Traffic from %s tunneled to Snort VNF (dpid=%s, port=%d).",
+                             attacker_ip, dpid, snort_port)
         
         # Update DLT Status
         self.dlt_manager.update_threat_status(attacker_ip, 1) # 1 = Quarantined
