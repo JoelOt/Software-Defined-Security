@@ -1,5 +1,9 @@
 ---------------------------------------------------------------------------
--- Snort 3 Configuration Snippet for Quarantine VNF
+-- Snort 3 Configuration for Federated SDN Quarantine VNF
+-- Architecture: Data Plane (Security VNF)
+--
+-- Launched via: sudo ./start_snort.sh <switch_name>
+-- Logs written to: network/snort/logs/
 ---------------------------------------------------------------------------
 
 -- Define network variables (using 'any' since this is a quarantine honeypot)
@@ -14,8 +18,7 @@ ips =
 }
 
 -- DAQ Configuration for passive interface sniffing (IDS mode)
--- If you need inline mode (IPS) to actively drop packets within the VNF, 
--- change mode to 'inline' and use afpacket with two interfaces.
+-- The interface is specified via the -i flag in start_snort.sh
 daq =
 {
     modules =
@@ -24,7 +27,8 @@ daq =
     }
 }
 
--- Alert configuration (output alerts to fast.log)
-alert_fast = {
+-- Alert configuration: fast alerts to log directory (specified via -l flag)
+alert_fast =
+{
     file = true
 }

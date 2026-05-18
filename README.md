@@ -31,7 +31,13 @@ federated-quarantine-sdn/
 │   └── utils.py                   # Blockchain helper functions
 ├── network/
 │   ├── topology_setup.py          # Dynamic Mininet script
-│   └── federation_tunnel.sh       # GRE tunnel script
+│   ├── federation_tunnel.sh       # GRE tunnel script
+│   └── snort/                     # Quarantine VNF configuration
+│       ├── snort.lua              # Snort 3 config
+│       ├── snort.conf             # Snort 2 config (legacy)
+│       ├── local.rules            # Detection rules (v2 & v3 compatible)
+│       ├── start_snort.sh         # Auto-detect version & launch
+│       └── logs/                  # Runtime alert logs (gitignored)
 ├── attacks/
 │   └── ddos_attack.py             # Scapy-based traffic generator
 ├── .env.example                   # Environment variables template
@@ -45,7 +51,7 @@ The following software must be installed on your systems (both VMs, if testing i
 *   **Mininet & Open vSwitch (OVS)** (Data Plane)
 *   **Ryu SDN Framework** (Control Plane)
 *   **Go-Ethereum (Geth)** (Trust Plane)
-*   **Snort 3** (Security VNF)
+*   **Snort 2.x or Snort 3** (Security VNF — the start script auto-detects the version)
 
 ## ⚙️ Setup & Installation
 1.  **Clone the repository:**
@@ -139,14 +145,27 @@ sudo bash network/federation_tunnel.sh 192.168.1.11 192.168.1.10 sb1
 sudo bash network/federation_tunnel.sh 127.0.0.1 127.0.0.1 sa1 sb1
 ```
 
-### Step 5: Distributed Attack Simulation
+### Step 5: Start the Quarantine VNF (Snort)
+Launch Snort on the dummy interface attached to the source domain's switch. The start script auto-detects whether you have Snort 2 or 3 installed.
+```bash
+# Terminal 8 (Domain A - Source Domain)
+# Snort listens on the sa1-snort dummy interface for redirected attacker traffic
+sudo bash network/snort/start_snort.sh sa1
+```
+You can monitor alerts in real-time:
+```bash
+tail -f network/snort/logs/alert_fast.txt
+```
+
+### Step 6: Distributed Attack Simulation
 Simulate a botnet by launching the attack from multiple hosts in Domain A targeting Domain B.
 ```text
-mininet-A> h1 python3 attacks/ddos_attack.py --target 10.0.2.10 & h2 python3 attacks/ddos_attack.py --target 10.0.2.10 & h3 python3 attacks/ddos_attack.py --target 10.0.2.10 &
+mininet-A> ha1 python3 attacks/ddos_attack.py --target 10.0.2.10 & ha2 python3 attacks/ddos_attack.py --target 10.0.2.10 & ha3 python3 attacks/ddos_attack.py --target 10.0.2.10 &
 ```
 
 **Workflow Results:**
 1.  **Detection:** Controller B detects pps spike and drops packets.
 2.  **Publication:** Controller B logs IoC to Geth as `Pending`.
 3.  **Containment:** Controller A identifies local IPs, triggers SFC to Snort VNF, and updates Geth to `Quarantined`.
-4.  **Recovery:** Controller B clears local `DROP` rules; Domain B resumes normal operations.
+4.  **Verification:** `tail -f network/snort/logs/alert_fast.txt` shows alerts — proof that traffic was redirected to the VNF.
+5.  **Recovery:** Controller B clears local `DROP` rules; Domain B resumes normal operations.

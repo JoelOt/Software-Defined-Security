@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Data Plane: Mininet Topology Setup for Federated SDN.
-Creates a single OVS switch with N hosts and a dedicated Snort VNF node.
-Connects to a remote Ryu controller.
+Creates a single OVS switch with N hosts and a dedicated dummy interface
+for the native Snort VNF. Connects to a remote Ryu controller.
 """
 import argparse
 import ipaddress
@@ -50,20 +50,18 @@ def create_topology(num_hosts: int, base_ip: str, controller_ip: str, domain_cod
             info(f'*** Warning: Not enough IPs in subnet for {num_hosts} hosts.\n')
             break
 
-    info('*** Adding Snort VNF node\n')
-    try:
-        vnf_ip_obj = next(hosts_iterator)
-        vnf_ip_str = f"{vnf_ip_obj}/{network.prefixlen}"
-        vnf_name = f'snort{domain_code}' if domain_code else 'snort'
-        snort_vnf = net.addHost(vnf_name, ip=vnf_ip_str)
-        net.addLink(snort_vnf, s1)
-    except StopIteration:
-        info('*** Warning: Not enough IPs to assign to snort.\n')
-
     info('*** Starting network\n')
     net.build()
     c0.start()
     s1.start([c0])
+
+    # Attach a native Snort VNF interface (dummy) to the OVS switch.
+    # Snort 3 runs as a host-level process sniffing this interface passively.
+    snort_intf = f'{s_name}-snort'
+    info(f'*** Attaching Snort VNF interface: {snort_intf}\n')
+    os.system(f'ip link add name {snort_intf} type dummy')
+    os.system(f'ip link set {snort_intf} up')
+    os.system(f'ovs-vsctl add-port {s_name} {snort_intf}')
 
     info('*** Configuring L3 routing bypass (Device Routes)\n')
     for host in net.hosts:
@@ -73,6 +71,11 @@ def create_topology(num_hosts: int, base_ip: str, controller_ip: str, domain_cod
 
     info('*** Running CLI\n')
     CLI(net)
+
+    # Cleanup: remove the Snort dummy interface before tearing down the network
+    info(f'*** Removing Snort VNF interface: {snort_intf}\n')
+    os.system(f'ovs-vsctl --if-exists del-port {s_name} {snort_intf}')
+    os.system(f'ip link del {snort_intf} 2>/dev/null || true')
 
     info('*** Stopping network\n')
     net.stop()

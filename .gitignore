@@ -16,5 +16,8 @@ env/
 blockchain/data/
 blockchain/contract_data.json
 
+# Snort VNF runtime logs
+network/snort/logs/
+
 # macOS specific
 .DS_Store
