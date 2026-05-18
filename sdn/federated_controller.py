@@ -11,10 +11,10 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ether_types, ipv4
 from ryu.lib import hub
 
-from sdn.utils import DLTManager
+from sdn.utils import DLTManager, TestDLTManager
 
 SNORT_PORT = 3
-LOCAL_SUBNET_PREFIX = "10."
+LOCAL_SUBNET_PREFIX = os.environ.get('LOCAL_SUBNET_PREFIX', '10.0.1.')
 DROP_HARD_TIMEOUT = 60 # Drop for 60 seconds locally
 
 
@@ -30,6 +30,8 @@ class FederatedController(app_manager.RyuApp):
         self.mac_to_port = {}
         self.datapaths = {}
         
+        self.logger.info("Initialized Controller for Domain Subnet: %s", LOCAL_SUBNET_PREFIX)
+        
         # Telemetry state
         # flow_stats[datapath_id][ipv4_src] = (last_packet_count, last_time)
         self.flow_stats = {}
@@ -38,7 +40,10 @@ class FederatedController(app_manager.RyuApp):
         self.dropped_ips = set()
         
         # 1. Initialize DLT Manager
-        self.dlt_manager = DLTManager()
+        if os.environ.get('USE_TEST_DLT', '0') == '1':
+            self.dlt_manager = TestDLTManager()
+        else:
+            self.dlt_manager = DLTManager()
         
         # 2. Start DLT event listener non-blocking thread
         self.dlt_manager.start_event_listener(self._dlt_event_callback)
@@ -116,14 +121,16 @@ class FederatedController(app_manager.RyuApp):
             if ipv4_pkt:
                 # Match on IPv4 source/destination to allow fine-grained telemetry tracking
                 match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src, eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ipv4_pkt.src, ipv4_dst=ipv4_pkt.dst)
+                flow_priority = 10
             else:
-                match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
+                match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src, eth_type=eth.ethertype)
+                flow_priority = 1
                 
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, 1, match, actions, msg.buffer_id)
+                self.add_flow(datapath, flow_priority, match, actions, msg.buffer_id)
                 return
             else:
-                self.add_flow(datapath, 1, match, actions)
+                self.add_flow(datapath, flow_priority, match, actions)
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
@@ -154,24 +161,33 @@ class FederatedController(app_manager.RyuApp):
         """
         Parses statistics, calculates PPS, and mitigates if threshold exceeded.
         """
+        self.logger.info("[TELEMETRY HEALTHCHECK] Received FlowStatsReply for datapath %s", ev.msg.datapath.id)
+        
         body = ev.msg.body
         datapath = ev.msg.datapath
         dpid = datapath.id
         current_time = time.time()
 
-        for stat in sorted([flow for flow in body if flow.priority == 1], key=lambda flow: (flow.match.get('in_port'), flow.match.get('ipv4_src'))):
-            ipv4_src = stat.match.get('ipv4_src')
-            if not ipv4_src:
-                continue
+        # Aggregate packet counts by source IP
+        src_packet_counts = {}
+        for stat in body:
+            if stat.priority == 10:
+                ipv4_src = stat.match.get('ipv4_src')
+                ipv4_dst = stat.match.get('ipv4_dst')
                 
-            packet_count = stat.packet_count
-            
+                # Only track telemetry if we are the VICTIM (dst is local) and attack is from OUTSIDE (src is external)
+                if ipv4_src and ipv4_dst and self._is_local_ip(ipv4_dst) and not self._is_local_ip(ipv4_src):
+                    src_packet_counts[ipv4_src] = src_packet_counts.get(ipv4_src, 0) + stat.packet_count
+
+        for ipv4_src, packet_count in src_packet_counts.items():
             # Calculate Packets Per Second (PPS)
             if ipv4_src in self.flow_stats[dpid]:
                 last_packet_count, last_time = self.flow_stats[dpid][ipv4_src]
                 dt = current_time - last_time
                 if dt > 0:
                     pps = (packet_count - last_packet_count) / dt
+                    
+                    self.logger.info("[TELEMETRY] IP %s current rate: %.2f pps", ipv4_src, pps)
                     
                     threshold = int(os.environ.get('TELEMETRY_PPS_THRESHOLD', '500'))
                     if pps > threshold and ipv4_src not in self.dropped_ips:

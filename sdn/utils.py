@@ -133,3 +133,83 @@ class DLTManager:
                 
         except Exception as e:
             self.logger.error("Failed to initialize event filters: %s", e)
+
+
+class TestDLTManager:
+    """
+    Mock DLT Manager for testing without a real Geth network.
+    Implements the same interface as DLTManager but only logs actions.
+    It can also simulate DLT events triggering back to the controller
+    by using a shared file for inter-process communication.
+    """
+    def __init__(self):
+        self.logger = logging.getLogger('TestDLTManager')
+        self.logger.setLevel(logging.INFO)
+        self.logger.info("Initialized TestDLTManager (Mock Mode with IPC).")
+        self.callback = None
+        self.shared_file = '/tmp/mock_dlt_events.jsonl'
+        self.last_pos = 0
+        
+        # Ensure file exists
+        if not os.path.exists(self.shared_file):
+            with open(self.shared_file, 'w') as f:
+                pass
+
+    def _append_event(self, event_name, args):
+        event_data = {
+            'event': event_name,
+            'args': args
+        }
+        with open(self.shared_file, 'a') as f:
+            f.write(json.dumps(event_data) + '\n')
+
+    def publish_threat(self, ip_address):
+        self.logger.info("MOCK: Publishing threat for IP: %s", ip_address)
+        # Simulate network delay then fire event
+        hub.spawn(self._mock_publish_delay, ip_address)
+
+    def _mock_publish_delay(self, ip_address):
+        hub.sleep(1)
+        self.logger.info("MOCK: Threat published. Tx Hash: 0xmockhash123")
+        self._append_event('ThreatReported', {'ipAddress': ip_address})
+
+    def update_threat_status(self, ip_address, status_int):
+        self.logger.info("MOCK: Updating threat status for IP: %s to %s", ip_address, status_int)
+        hub.spawn(self._mock_update_delay, ip_address, status_int)
+
+    def _mock_update_delay(self, ip_address, status_int):
+        hub.sleep(10)
+        self.logger.info("MOCK: Status updated. Tx Hash: 0xmockhash456")
+        self._append_event('StatusUpdated', {'ipAddress': ip_address, 'status': status_int})
+
+    def start_event_listener(self, callback_func):
+        self.logger.info("MOCK: Starting DLT event listener loop...")
+        self.callback = callback_func
+        # Start reading from current EOF to ignore old mock events
+        if os.path.exists(self.shared_file):
+            self.last_pos = os.path.getsize(self.shared_file)
+        hub.spawn(self._poll_shared_file)
+        
+    def _poll_shared_file(self):
+        class MockEvent:
+            def __init__(self, event_name, args):
+                self.event = event_name
+                self.args = args
+                
+        while True:
+            try:
+                if os.path.exists(self.shared_file):
+                    with open(self.shared_file, 'r') as f:
+                        f.seek(self.last_pos)
+                        lines = f.readlines()
+                        self.last_pos = f.tell()
+                        
+                        for line in lines:
+                            if line.strip():
+                                data = json.loads(line)
+                                if self.callback:
+                                    self.callback(MockEvent(data['event'], data['args']))
+            except Exception as e:
+                self.logger.error("MOCK polling error: %s", e)
+            
+            hub.sleep(2)
