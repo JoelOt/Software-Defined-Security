@@ -94,13 +94,16 @@ python3 deploy.py
 
 ### Step 2: Start the Control Plane (Ryu)
 Launch the symmetric controller for both domains.
-```bash
-# Terminal 3 (Controller A)
-PYTHONPATH=. ryu-manager sdn/federated_controller.py
 
-# Terminal 4 (Controller B)
-# If testing on the same machine, use the secondary port defined in your .env
-PYTHONPATH=. ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6653
+*Note: If you have not initialized the Geth trust plane, you can run the controllers in mock mode by prefixing the commands with `USE_TEST_DLT=1`.*
+
+```bash
+# Terminal 3 (Controller A - Source Domain)
+LOCAL_SUBNET_PREFIX="10.0.1." PYTHONPATH=. ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6633
+
+# Terminal 4 (Controller B - Victim Domain)
+# If testing on the same machine, use a secondary port (e.g., 6653)
+LOCAL_SUBNET_PREFIX="10.0.2." PYTHONPATH=. ryu-manager sdn/federated_controller.py --ofp-tcp-listen-port 6653
 ```
 
 ### Step 3: Establish the Data Plane (Mininet)
@@ -109,22 +112,31 @@ If running both domains on the same VM, provide the `--domain-code` parameter to
 ```bash
 # Terminal 5 (Domain A): 10 hosts starting at 10.0.1.1
 # Note: use `sudo -E` to preserve your environment variables (like .env config)
-sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24 --domain-code a
+sudo -E python3 network/topology_setup.py --num-hosts 10 --base-ip 10.0.1.0/24 --domain-code a --controller-port 6633
 
 # Terminal 6 (Domain B): 5 hosts starting at 10.0.2.1
-sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24 --domain-code b
+sudo -E python3 network/topology_setup.py --num-hosts 5 --base-ip 10.0.2.0/24 --domain-code b --controller-port 6653
 ```
 
 ### Step 4: Establish the Federation Tunnel
-The tunnel script connects the two OVS switches via GRE. This must be executed bidirectionally on both VMs (or on the same VM if testing locally).
-*Note: Because we used `--domain-code`, the switch names are `sa` and `sb` instead of `s1`.*
+The tunnel script connects the two OVS switches via GRE or local Patch Ports. This must be executed bidirectionally on both VMs (or once on the same VM if testing locally).
+*Note: Because we used `--domain-code`, the switch names are `sa1` and `sb1` instead of `s1`.*
+
+**Option A: Different VMs (GRE Tunnel)**
 ```bash
 # Terminal 7 (Domain A -> Domain B)
-# Usage: ./federation_tunnel.sh <LOCAL_VM_IP> <REMOTE_VM_IP> <OVS_SWITCH_NAME>
-sudo bash network/federation_tunnel.sh 192.168.1.10 192.168.1.11 sa
+sudo bash network/federation_tunnel.sh 192.168.1.10 192.168.1.11 sa1
 
 # Terminal 8 (Domain B -> Domain A)
-sudo bash network/federation_tunnel.sh 192.168.1.11 192.168.1.10 sb
+sudo bash network/federation_tunnel.sh 192.168.1.11 192.168.1.10 sb1
+```
+
+**Option B: Same VM (Local Patch Port)**
+```bash
+# Terminal 7
+# Usage: ./federation_tunnel.sh <LOCAL_IP> <LOCAL_IP> <LOCAL_SWITCH> <REMOTE_SWITCH>
+# You only need to run this once!
+sudo bash network/federation_tunnel.sh 127.0.0.1 127.0.0.1 sa1 sb1
 ```
 
 ### Step 5: Distributed Attack Simulation

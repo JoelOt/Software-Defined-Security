@@ -1,12 +1,8 @@
 import os
 import sys
-import time
 import threading
+import time
 from dotenv import load_dotenv
-
-# Fix: Import SDN_api from hyphenated directory path
-sys.path.append(os.path.join(os.getcwd(), 'blockchain', 'dlt-network-docker', 'code'))
-import SDN_api
 
 load_dotenv()
 
@@ -19,8 +15,12 @@ from ryu.lib import hub
 
 from sdn.utils import DLTManager
 
+# Fix: Import SDN_api from hyphenated directory path
+sys.path.append(os.path.join(os.getcwd(), 'blockchain', 'dlt-network-docker', 'code'))
+import SDN_api
+
 SNORT_PORT = 3
-LOCAL_SUBNET_PREFIX = "10."
+LOCAL_SUBNET_PREFIX = os.environ.get('LOCAL_SUBNET_PREFIX', '10.0.1.')
 DROP_HARD_TIMEOUT = 60 # Drop for 60 seconds locally
 
 
@@ -36,6 +36,8 @@ class FederatedController(app_manager.RyuApp):
         self.mac_to_port = {}
         self.datapaths = {}
         
+        self.logger.info("Initialized Controller for Domain Subnet: %s", LOCAL_SUBNET_PREFIX)
+        
         # Telemetry state
         # flow_stats[datapath_id][ipv4_src] = (last_packet_count, last_time)
         self.flow_stats = {}
@@ -43,11 +45,15 @@ class FederatedController(app_manager.RyuApp):
         # Threat state: Keep track of IPs we have locally dropped
         self.dropped_ips = set()
         
-        # 1. Initialize DLT Manager
+         # 1. Initialize DLT Manager
         self.dlt_manager = DLTManager()
         
         # Start SDN API to receive DLT config from Orchestrator
-        self.api_port = int(os.environ.get('SDN_API_PORT', '5000'))
+        if LOCAL_SUBNET_PREFIX == "10.0.1.":
+          self.api_port = int(os.environ.get('SDN_API_PORT', '5000'))
+        else:
+          self.api_port = int(os.environ.get('SDN_API_PORT', '5001'))
+
         self.api_thread = threading.Thread(target=SDN_api.init, args=(self,), name="SDN_api_thread", daemon=True)
         self.api_thread.start()
         
@@ -56,22 +62,6 @@ class FederatedController(app_manager.RyuApp):
         
         # 3. Start Telemetry monitor thread
         self.monitor_thread = hub.spawn(self._monitor)
-
-        # 4. Optional: Start a DLT Test thread if env var is set
-        if os.environ.get('DLT_TEST_MODE') == 'true':
-            hub.spawn(self._dlt_test_loop)
-
-    def _dlt_test_loop(self):
-        """
-        Periodically publishes a dummy threat to verify DLT production/consumption.
-        """
-        self.logger.info("[TEST] DLT Test Mode enabled. Waiting for config...")
-        while not self.dlt_manager.configured:
-            hub.sleep(1)
-        
-        self.logger.info("[TEST] Config received. Publishing dummy threat 10.0.0.99 in 5 seconds...")
-        hub.sleep(5)
-        self.dlt_manager.publish_threat("10.0.0.99")
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -86,13 +76,13 @@ class FederatedController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
-
+    
     def init_stats(self, info):
         self.dlt_manager.init_stats(info)
 
     def get_port_number(self):
         return self.api_port
-
+    
     def add_flow(self, datapath, priority, match, actions, buffer_id=None, hard_timeout=0, idle_timeout=0):
         """
         Helper method to insert OpenFlow rules.
@@ -149,14 +139,16 @@ class FederatedController(app_manager.RyuApp):
             if ipv4_pkt:
                 # Match on IPv4 source/destination to allow fine-grained telemetry tracking
                 match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src, eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ipv4_pkt.src, ipv4_dst=ipv4_pkt.dst)
+                flow_priority = 10
             else:
-                match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
+                match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src, eth_type=eth.ethertype)
+                flow_priority = 1
                 
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, 1, match, actions, msg.buffer_id)
+                self.add_flow(datapath, flow_priority, match, actions, msg.buffer_id)
                 return
             else:
-                self.add_flow(datapath, 1, match, actions)
+                self.add_flow(datapath, flow_priority, match, actions)
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
@@ -182,6 +174,7 @@ class FederatedController(app_manager.RyuApp):
         req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
 
+  
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
         """
@@ -192,7 +185,7 @@ class FederatedController(app_manager.RyuApp):
         dpid = datapath.id
         current_time = time.time()
 
-        for stat in sorted([flow for flow in body if flow.priority == 1], key=lambda flow: (flow.match.get('in_port'), flow.match.get('ipv4_src'))):
+        for stat in sorted([flow for flow in body if flow.priority == 10], key=lambda flow: (flow.match.get('in_port'), flow.match.get('ipv4_src'))):
             ipv4_src = stat.match.get('ipv4_src')
             if not ipv4_src:
                 continue
@@ -208,11 +201,19 @@ class FederatedController(app_manager.RyuApp):
                     
                     threshold = int(os.environ.get('TELEMETRY_PPS_THRESHOLD', '500'))
                     if pps > threshold and ipv4_src not in self.dropped_ips:
-                        self.logger.warning("[TELEMETRY] Anomaly detected! %s is sending %.2f pps.", ipv4_src, pps)
-                        self._trigger_local_mitigation(datapath, ipv4_src)
+                        if self._is_local_ip(ipv4_src):
+                            # If local, we don't DROP yet. We report and wait for DLT-triggered SFC.
+                            self.logger.warning("[TELEMETRY] Local anomaly! %s sending %.2f pps. Reporting to DLT...", ipv4_src, pps)
+                            self.dlt_manager.publish_threat(ipv4_src)
+                            # Track to avoid re-publishing every 3 seconds
+                            self.dropped_ips.add(ipv4_src)
+                        else:
+                            # If remote, we are the victim. Trigger immediate DROP and report.
+                            self.logger.warning("[TELEMETRY] Remote anomaly! %s sending %.2f pps.", ipv4_src, pps)
+                            self._trigger_local_mitigation(datapath, ipv4_src)
                         
             self.flow_stats[dpid][ipv4_src] = (packet_count, current_time)
-
+            
     def _trigger_local_mitigation(self, datapath, attacker_ip):
         """
         Workflow Step 1 (Victim): Detects anomaly -> Pushes DROP -> Publishes 'Pending' to DLT.
@@ -268,6 +269,15 @@ class FederatedController(app_manager.RyuApp):
             self.logger.info("[SFC] IP %s is not in our domain. Ignoring event.", attacker_ip)
             return
             
+        # Prevent redundant status updates if we are already handling this IP
+        #if attacker_ip in self.dropped_ips:
+        #    self.logger.info("[SFC] IP %s is already being handled. Skipping.", attacker_ip)
+        #    return
+        if attacker_ip in self.dropped_ips:
+            self.logger.info("[SFC] IP %s is already being handled. Skipping.", attacker_ip)
+            return
+
+        self.dropped_ips.add(attacker_ip)
         self.logger.warning("[SFC] Attacker %s belongs to our domain! Triggering quarantine...", attacker_ip)
         
         for datapath in self.datapaths.values():

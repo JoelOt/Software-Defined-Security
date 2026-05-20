@@ -178,19 +178,37 @@ class NetworkOrchestrator(object):
 
         for i in range(len(self.accounts)):
             data_to_send = self.accounts[self.agent_names[i]]
-            try:
-                response = requests.post('http://127.0.0.1:' + str(self.sdn_ports[i]) + '/DLT_info',
-                                         json=data_to_send)
-            except:
-                raise Exception("Error connecting with SDN API")
+            port = self.sdn_ports[i]
+            url = f"http://127.0.0.1:{port}/DLT_info"
+            
+            # Implementation of a retry mechanism to allow SDN Controllers time to initialize their API servers.
+            max_retries = 10
+            success = False
+            for attempt in range(max_retries):
+                try:
+                    # Attempt to push DLT credentials to the SDN Controller
+                    response = requests.post(url, json=data_to_send, timeout=5)
+                    if response.status_code == 200:
+                        print(f"Successfully pushed DLT info to SDN Controller at port {port}")
+                        success = True
+                        break
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                    print(f"Waiting for SDN Controller on port {port}... (Attempt {attempt+1}/{max_retries})")
+                    t.sleep(2)
+            
+            if not success:
+                raise Exception(f"Could not connect to SDN API at port {port} after {max_retries} attempts. "
+                                "Ensure Ryu controllers are running and ports match ports_info.json.")
 
     def run(self):
         print("Connecting with DLT...")
         self.automatic_start()
         print("SDN Controllers configured")
-        while True:
-            pass
-
+        try:
+            while True:
+                t.sleep(1)
+        except KeyboardInterrupt:
+            print("Orchestrator terminated.")
 
 if __name__ == "__main__":
     solcx.install_solc('0.8.12')

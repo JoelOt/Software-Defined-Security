@@ -139,24 +139,32 @@ class DLTManager:
             while not self.configured:
                 hub.sleep(1)
                 
-            # Create event filters looking from the latest block
-            threat_filter = self.contract.events.ThreatReported.create_filter(fromBlock='latest')
-            status_filter = self.contract.events.StatusUpdated.create_filter(fromBlock='latest')
+            threat_filter = None
+            status_filter = None
             
             while True:
                 try:
+                    # (Re)create filters if they are None (initial run or after a connection/filter error)
+                    if threat_filter is None:
+                        threat_filter = self.contract.events.ThreatReported.create_filter(fromBlock='latest')
+                    if status_filter is None:
+                        status_filter = self.contract.events.StatusUpdated.create_filter(fromBlock='latest')
+
                     # Poll for new ThreatReported events
                     for event in threat_filter.get_new_entries():
-                        self.logger.info("Caught ThreatReported event")
+                        self.logger.info("Caught ThreatReported event for IP: %s", event['args']['ip'])
                         callback_func(event)
                         
                     # Poll for new StatusUpdated events
                     for event in status_filter.get_new_entries():
-                        self.logger.info("Caught StatusUpdated event")
+                        self.logger.info("Caught StatusUpdated event for IP: %s to Status: %s", event['args']['ip'], event['args']['newStatus'])
                         callback_func(event)
                         
                 except Exception as e:
                     self.logger.error("Error while polling events: %s", e)
+                    # Reset filters so they are recreated in the next iteration
+                    threat_filter = None
+                    status_filter = None
                 
                 # Crucial: Yield to Ryu's eventlet loop
                 hub.sleep(2)
