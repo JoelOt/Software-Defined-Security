@@ -11,7 +11,7 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ether_types, ipv4
 from ryu.lib import hub
 
-from sdn.utils import DLTManager, TestDLTManager
+from sdn.utils import DLTManager, TestDLTManager, ThreatStatus
 
 # Snort VNF port is discovered dynamically via OFPPortDescStatsReply
 LOCAL_SUBNET_PREFIX = os.environ.get('LOCAL_SUBNET_PREFIX', '10.0.1.')
@@ -181,7 +181,7 @@ class FederatedController(app_manager.RyuApp):
         """
         Parses statistics, calculates PPS, and mitigates if threshold exceeded.
         """
-        self.logger.info("[TELEMETRY HEALTHCHECK] Received FlowStatsReply for datapath %s", ev.msg.datapath.id)
+        # (Periodic healthcheck log silenced to reduce console spam)
         
         body = ev.msg.body
         datapath = ev.msg.datapath
@@ -207,7 +207,8 @@ class FederatedController(app_manager.RyuApp):
                 if dt > 0:
                     pps = (packet_count - last_packet_count) / dt
                     
-                    self.logger.info("[TELEMETRY] IP %s current rate: %.2f pps", ipv4_src, pps)
+                    if pps > 0:
+                        self.logger.info("[TELEMETRY] IP %s current rate: %.2f pps", ipv4_src, pps)
                     
                     threshold = int(os.environ.get('TELEMETRY_PPS_THRESHOLD', '500'))
                     if pps > threshold and ipv4_src not in self.dropped_ips:
@@ -240,16 +241,25 @@ class FederatedController(app_manager.RyuApp):
         """
         event_name = event.event
         args = event.args
-        attacker_ip = args.get('ipAddress')
+        
+        # Support both real contract events ('ip') and mock test events ('ipAddress')
+        attacker_ip = args.get('ip') or args.get('ipAddress')
         
         if event_name == 'ThreatReported':
             self.logger.info("[DLT EVENT] ThreatReported (Pending) received for IP %s", attacker_ip)
             self._handle_pending_threat(attacker_ip)
             
         elif event_name == 'StatusUpdated':
-            status = args.get('status')
-            self.logger.info("[DLT EVENT] StatusUpdated received. IP %s status changed to %s", attacker_ip, status)
-            if status == 1: # 1 corresponds to Quarantined in the Enum
+            # Support both real contract events ('newStatus') and mock test events ('status')
+            status_val = args.get('newStatus') if args.get('newStatus') is not None else args.get('status')
+            
+            try:
+                status_label = ThreatStatus(status_val).name
+            except ValueError:
+                status_label = f"UNKNOWN ({status_val})"
+                
+            self.logger.info("[DLT EVENT] StatusUpdated received. IP %s status changed to %s", attacker_ip, status_label)
+            if status_val == ThreatStatus.QUARANTINED:
                 self._handle_quarantined_threat(attacker_ip)
 
     def _is_local_ip(self, ip_address):
@@ -287,7 +297,7 @@ class FederatedController(app_manager.RyuApp):
                              attacker_ip, dpid, snort_port)
         
         # Update DLT Status
-        self.dlt_manager.update_threat_status(attacker_ip, 1) # 1 = Quarantined
+        self.dlt_manager.update_threat_status(attacker_ip, ThreatStatus.QUARANTINED)
 
     def _handle_quarantined_threat(self, attacker_ip):
         """

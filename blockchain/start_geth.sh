@@ -34,7 +34,7 @@ fi
 
 # ── Configuration (from .env, with sensible defaults) ──────────────────────
 CONTAINER_NAME="${GETH_CONTAINER_NAME:-geth-poa}"
-DOCKER_IMAGE="${GETH_DOCKER_IMAGE:-ethereum/client-go:latest}"
+DOCKER_IMAGE="${GETH_DOCKER_IMAGE:-ethereum/client-go:v1.13.15}"
 NETWORK_ID="${GETH_NETWORK_ID:-12345}"
 CHAIN_PERIOD="${GETH_CHAIN_PERIOD:-1}"
 ACCOUNT_PASSWORD="${GETH_ACCOUNT_PASSWORD:-testpassword}"
@@ -74,6 +74,8 @@ if [ -d "${KEYSTORE_DIR}" ] && [ "$(ls -A "${KEYSTORE_DIR}" 2>/dev/null)" ]; the
 else
     info "Creating new sealer account..."
     docker run --rm \
+        -u "$(id -u):$(id -g)" \
+        -e HOME=/data \
         -v "${DATA_DIR}:/data" \
         "${DOCKER_IMAGE}" \
         account new \
@@ -139,6 +141,8 @@ ok "genesis.json written to ${GENESIS_FILE}"
 if [ ! -d "${DATA_DIR}/geth/chaindata" ]; then
     info "Initialising chain database..."
     docker run --rm \
+        -u "$(id -u):$(id -g)" \
+        -e HOME=/data \
         -v "${DATA_DIR}:/data" \
         "${DOCKER_IMAGE}" \
         init --datadir /data /data/genesis.json
@@ -152,6 +156,8 @@ info "Starting Geth PoA node in Docker..."
 
 docker run -d \
     --name "${CONTAINER_NAME}" \
+    -u "$(id -u):$(id -g)" \
+    -e HOME=/data \
     -v "${DATA_DIR}:/data" \
     -p 8545:8545 \
     -p 8546:8546 \

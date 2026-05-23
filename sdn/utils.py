@@ -4,11 +4,17 @@ Trust Plane component: Utilities for Ryu controller to interface with the Geth b
 import json
 import os
 import logging
+from enum import IntEnum
 from web3 import Web3
 from dotenv import load_dotenv
 
 load_dotenv()
 from ryu.lib import hub
+
+class ThreatStatus(IntEnum):
+    NONE = 0
+    PENDING = 1
+    QUARANTINED = 2
 
 class DLTManager:
     """
@@ -26,6 +32,13 @@ class DLTManager:
         if not self.w3.is_connected():
             self.logger.error("Failed to connect to the Ethereum node at %s", rpc_url)
             return
+
+        # Inject Geth PoA middleware to validate Clique consensus blocks (longer extraData)
+        try:
+            from web3.middleware import ExtraDataToPOAMiddleware as poa_middleware
+        except ImportError:
+            from web3.middleware import geth_poa_middleware as poa_middleware
+        self.w3.middleware_onion.inject(poa_middleware, layer=0)
             
         self.logger.info("Successfully connected to Ethereum node.")
         
@@ -89,7 +102,11 @@ class DLTManager:
         Internal task to execute the status update transaction.
         """
         try:
-            self.logger.info("Updating threat status for IP: %s to %s", ip_address, status_int)
+            try:
+                status_label = ThreatStatus(status_int).name
+            except ValueError:
+                status_label = str(status_int)
+            self.logger.info("Updating threat status for IP: %s to %s", ip_address, status_label)
             tx_hash = self.contract.functions.updateStatus(ip_address, status_int).transact({'from': self.account})
             self.logger.info("Status updated. Tx Hash: %s", tx_hash.hex())
         except Exception as e:
@@ -109,9 +126,13 @@ class DLTManager:
         """
         self.logger.info("Starting DLT event listener loop...")
         try:
-            # Create event filters looking from the latest block
-            threat_filter = self.contract.events.ThreatReported.create_filter(fromBlock='latest')
-            status_filter = self.contract.events.StatusUpdated.create_filter(fromBlock='latest')
+            # Create event filters looking from the latest block (handles web3.py v5 and v6+ signatures)
+            try:
+                threat_filter = self.contract.events.ThreatReported.create_filter(from_block='latest')
+                status_filter = self.contract.events.StatusUpdated.create_filter(from_block='latest')
+            except TypeError:
+                threat_filter = self.contract.events.ThreatReported.create_filter(fromBlock='latest')
+                status_filter = self.contract.events.StatusUpdated.create_filter(fromBlock='latest')
             
             while True:
                 try:
@@ -171,7 +192,7 @@ class TestDLTManager:
     def _mock_publish_delay(self, ip_address):
         hub.sleep(1)
         self.logger.info("MOCK: Threat published. Tx Hash: 0xmockhash123")
-        self._append_event('ThreatReported', {'ipAddress': ip_address})
+        self._append_event('ThreatReported', {'ip': ip_address, 'ipAddress': ip_address})
 
     def update_threat_status(self, ip_address, status_int):
         self.logger.info("MOCK: Updating threat status for IP: %s to %s", ip_address, status_int)
@@ -180,7 +201,12 @@ class TestDLTManager:
     def _mock_update_delay(self, ip_address, status_int):
         hub.sleep(10)
         self.logger.info("MOCK: Status updated. Tx Hash: 0xmockhash456")
-        self._append_event('StatusUpdated', {'ipAddress': ip_address, 'status': status_int})
+        self._append_event('StatusUpdated', {
+            'ip': ip_address,
+            'ipAddress': ip_address,
+            'newStatus': status_int,
+            'status': status_int
+        })
 
     def start_event_listener(self, callback_func):
         self.logger.info("MOCK: Starting DLT event listener loop...")
