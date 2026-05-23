@@ -25,7 +25,11 @@ The system utilizes a **Symmetric Controller Design**. Rather than using special
 federated-quarantine-sdn/
 ├── blockchain/
 │   ├── ThreatIntel.sol            # Smart Contract (Solidity)
-│   └── deploy.py                  # Deployment script (Web3.py)
+│   ├── deploy.py                  # Deployment script (Web3.py)
+│   ├── start_geth.sh              # Automated Geth PoA node startup
+│   ├── stop_geth.sh               # Stop/clean the Geth node
+│   ├── data/                      # Chain data & keystore (gitignored)
+│   └── contract_data.json         # Deployed address + ABI (gitignored)
 ├── sdn/
 │   ├── federated_controller.py    # Symmetric Ryu application
 │   └── utils.py                   # Blockchain helper functions
@@ -50,7 +54,7 @@ The following software must be installed on your systems (both VMs, if testing i
 *   **Python 3.10+**
 *   **Mininet & Open vSwitch (OVS)** (Data Plane)
 *   **Ryu SDN Framework** (Control Plane)
-*   **Go-Ethereum (Geth)** (Trust Plane)
+*   **Docker** (for running the Geth PoA node)
 *   **Snort 2.x or Snort 3** (Security VNF — the start script auto-detects the version)
 
 ## ⚙️ Setup & Installation
@@ -80,22 +84,27 @@ The following software must be installed on your systems (both VMs, if testing i
 *Note: In a true federated setup, Domain A and Domain B reside on different VMs. Adjust IP addresses according to your setup.*
 
 ### Step 1: Initialize the Trust Plane (Geth PoA)
-Initialize and start the private Go-Ethereum (Geth) network using Proof of Authority (Clique).
-```bash
-# Terminal 1: Initialize the blockchain state
-geth --datadir ./blockchain/data init blockchain/config/genesis.json
+Start the private Go-Ethereum (Geth) Proof-of-Authority node using the automated startup script.
+The script creates a sealer account, generates `genesis.json`, initializes the chain, and launches the Docker container — all in one step.
 
-# Start the Geth node
-geth --datadir ./blockchain/data --networkid 1337 --http --http.api eth,net,web3 --mine --miner.threads=1
+> **Note:** The Geth configuration (container name, Docker image, chain period, etc.) is read from your `.env` file. See `.env.example` for all available options.
+
+```bash
+# Start the Geth PoA node (first run creates everything automatically)
+blockchain/start_geth.sh
 ```
 
 Deploy the Smart Contract:
 ```bash
-# Terminal 2
-cd blockchain/
-python3 deploy.py
-# The deployment script automatically saves the address and ABI to contract_data.json. 
+python3 blockchain/deploy.py
+# The deployment script automatically saves the address and ABI to blockchain/contract_data.json.
 # You can also manually add it to your .env file as CONTRACT_ADDRESS.
+```
+
+To stop or reset the blockchain:
+```bash
+blockchain/stop_geth.sh          # Stop the container (preserves chain data)
+blockchain/stop_geth.sh --clean  # Stop AND wipe all data (full reset)
 ```
 
 ### Step 2: Establish the Data Plane (Mininet)
