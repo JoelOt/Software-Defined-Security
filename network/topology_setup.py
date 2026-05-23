@@ -59,6 +59,8 @@ def create_topology(num_hosts: int, base_ip: str, controller_ip: str, domain_cod
     # Snort 3 runs as a host-level process sniffing this interface passively.
     snort_intf = f'{s_name}-snort'
     info(f'*** Attaching Snort VNF interface: {snort_intf}\n')
+    os.system(f'ovs-vsctl --if-exists del-port {s_name} {snort_intf}')
+    os.system(f'ip link del {snort_intf} 2>/dev/null || true')
     os.system(f'ip link add name {snort_intf} type dummy')
     os.system(f'ip link set {snort_intf} up')
     os.system(f'ovs-vsctl add-port {s_name} {snort_intf}')

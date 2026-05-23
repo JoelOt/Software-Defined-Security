@@ -5,6 +5,8 @@ __pycache__/
 
 # Virtual environments
 venv/
+venv
+venv311/
 .venv/
 env/
 .env/
@@ -15,6 +17,14 @@ env/
 # Blockchain data
 blockchain/data/
 blockchain/contract_data.json
+blockchain/orchestrator_config.json
+blockchain/dlt-network-docker/code/credentials.json
+blockchain/dlt-network-docker/code/dataFile.csv
+blockchain/dlt-network-docker/code/*.h5
+blockchain/dlt-network-docker/dlt-node/bootnode/boot.key
+blockchain/dlt-network-docker/dlt-node/**/keystore/
+blockchain/dlt-network-docker/dlt-node/**/geth/
+blockchain/dlt-network-docker/dlt-node/scripts/password.txt
 
 # Snort VNF runtime logs
 network/snort/logs/

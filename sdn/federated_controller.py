@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from dotenv import load_dotenv
 
@@ -16,6 +17,8 @@ from sdn.utils import DLTManager, TestDLTManager
 # Snort VNF port is discovered dynamically via OFPPortDescStatsReply
 LOCAL_SUBNET_PREFIX = os.environ.get('LOCAL_SUBNET_PREFIX', '10.0.1.')
 DROP_HARD_TIMEOUT = 60 # Drop for 60 seconds locally
+THREAT_STATUS_PENDING = 1
+THREAT_STATUS_QUARANTINED = 2
 
 
 class FederatedController(app_manager.RyuApp):
@@ -52,6 +55,33 @@ class FederatedController(app_manager.RyuApp):
         # 3. Start Telemetry monitor thread
         self.monitor_thread = hub.spawn(self._monitor)
 
+        if os.environ.get('USE_DLT_ORCHESTRATOR', '0') == '1':
+            from sdn import dlt_api
+            self.api_port = self._resolve_api_port()
+            self.api_thread = threading.Thread(
+                target=dlt_api.init,
+                args=(self,),
+                name="DLTApiThread",
+                daemon=True
+            )
+            self.api_thread.start()
+
+    def _resolve_api_port(self):
+        explicit_port = os.environ.get('SDN_API_PORT')
+        if explicit_port:
+            return int(explicit_port)
+        if LOCAL_SUBNET_PREFIX == "10.0.1.":
+            return 5000
+        if LOCAL_SUBNET_PREFIX == "10.0.2.":
+            return 5001
+        return 5000
+
+    def get_port_number(self):
+        return getattr(self, 'api_port', self._resolve_api_port())
+
+    def init_stats(self, info):
+        self.dlt_manager.init_stats(info)
+
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
@@ -81,9 +111,10 @@ class FederatedController(app_manager.RyuApp):
         for port in ev.msg.body:
             port_name = port.name.decode() if isinstance(port.name, bytes) else port.name
             if port_name.endswith('-snort'):
-                self.snort_ports[dpid] = port.port_no
-                self.logger.info("[VNF] Snort VNF discovered on dpid=%s port=%d (name=%s)",
-                                 dpid, port.port_no, port_name)
+                if self.snort_ports.get(dpid) != port.port_no:
+                    self.snort_ports[dpid] = port.port_no
+                    self.logger.info("[VNF] Snort VNF discovered on dpid=%s port=%d (name=%s)",
+                                     dpid, port.port_no, port_name)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None, hard_timeout=0, idle_timeout=0):
         """
@@ -92,7 +123,7 @@ class FederatedController(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        if buffer_id:
+        if buffer_id is not None:
             mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
                                     priority=priority, match=match,
                                     instructions=inst, hard_timeout=hard_timeout,
@@ -168,12 +199,18 @@ class FederatedController(app_manager.RyuApp):
         self.logger.info("Starting Telemetry monitoring loop...")
         while True:
             for datapath in self.datapaths.values():
+                self._request_port_desc(datapath)
                 self._request_stats(datapath)
             hub.sleep(3)
 
     def _request_stats(self, datapath):
         parser = datapath.ofproto_parser
         req = parser.OFPFlowStatsRequest(datapath)
+        datapath.send_msg(req)
+
+    def _request_port_desc(self, datapath):
+        parser = datapath.ofproto_parser
+        req = parser.OFPPortDescStatsRequest(datapath)
         datapath.send_msg(req)
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
@@ -186,6 +223,7 @@ class FederatedController(app_manager.RyuApp):
         body = ev.msg.body
         datapath = ev.msg.datapath
         dpid = datapath.id
+        self.flow_stats.setdefault(dpid, {})
         current_time = time.time()
 
         # Aggregate packet counts by source IP
@@ -238,9 +276,17 @@ class FederatedController(app_manager.RyuApp):
         Callback handler for smart contract events.
         Executes without blocking the Ryu event loop.
         """
-        event_name = event.event
-        args = event.args
-        attacker_ip = args.get('ipAddress')
+        event_get = event.get if hasattr(event, 'get') else lambda key, default=None: default
+        event_name = getattr(event, 'event', None) or event_get('event')
+        args = getattr(event, 'args', None) or event_get('args') or {}
+        if not hasattr(args, 'get'):
+            self.logger.warning("[DLT EVENT] Received %s event with invalid args: %s", event_name, args)
+            return
+        attacker_ip = args.get('ipAddress') or args.get('ip')
+
+        if attacker_ip is None:
+            self.logger.warning("[DLT EVENT] Received %s event without an IP. Args: %s", event_name, args)
+            return
         
         if event_name == 'ThreatReported':
             self.logger.info("[DLT EVENT] ThreatReported (Pending) received for IP %s", attacker_ip)
@@ -248,15 +294,17 @@ class FederatedController(app_manager.RyuApp):
             
         elif event_name == 'StatusUpdated':
             status = args.get('status')
+            if status is None:
+                status = args.get('newStatus')
             self.logger.info("[DLT EVENT] StatusUpdated received. IP %s status changed to %s", attacker_ip, status)
-            if status == 1: # 1 corresponds to Quarantined in the Enum
+            if status == THREAT_STATUS_QUARANTINED:
                 self._handle_quarantined_threat(attacker_ip)
 
     def _is_local_ip(self, ip_address):
         """
         Checks if the reported IP belongs to our specific domain.
         """
-        return ip_address.startswith(LOCAL_SUBNET_PREFIX)
+        return bool(ip_address and ip_address.startswith(LOCAL_SUBNET_PREFIX))
 
     def _handle_pending_threat(self, attacker_ip):
         """
@@ -268,6 +316,7 @@ class FederatedController(app_manager.RyuApp):
             
         self.logger.warning("[SFC] Attacker %s belongs to our domain! Triggering quarantine...", attacker_ip)
         
+        quarantine_applied = False
         for datapath in self.datapaths.values():
             dpid = datapath.id
             parser = datapath.ofproto_parser
@@ -282,12 +331,17 @@ class FederatedController(app_manager.RyuApp):
             match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=attacker_ip)
             actions = [parser.OFPActionOutput(snort_port)]
             self.add_flow(datapath, priority=200, match=match, actions=actions)
+            quarantine_applied = True
             
             self.logger.info("[SFC] Traffic from %s tunneled to Snort VNF (dpid=%s, port=%d).",
                              attacker_ip, dpid, snort_port)
         
+        if not quarantine_applied:
+            self.logger.error("[SFC] Quarantine for %s was not applied on any datapath.", attacker_ip)
+            return
+
         # Update DLT Status
-        self.dlt_manager.update_threat_status(attacker_ip, 1) # 1 = Quarantined
+        self.dlt_manager.update_threat_status(attacker_ip, THREAT_STATUS_QUARANTINED)
 
     def _handle_quarantined_threat(self, attacker_ip):
         """
