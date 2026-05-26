@@ -1,0 +1,7 @@
+{
+  "dlt_rpc_url": "http://127.0.0.1:8545",
+  "chain_id": 1337,
+  "agent_names": ["DomainA", "DomainB"],
+  "sdn_api_ports": [5000, 5001],
+  "notes": "Do not add private keys to this file. Use DLT_ORCHESTRATOR_PRIVATE_KEY or a node-unlocked development account at runtime."
+}

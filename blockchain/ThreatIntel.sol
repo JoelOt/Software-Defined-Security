@@ -56,4 +56,14 @@ contract ThreatIntel {
 
         emit StatusUpdated(ip, newStatus, msg.sender, block.timestamp);
     }
+
+    /**
+     * @dev Returns the current mitigation status for an IoC.
+     *      Kept explicit for controller/orchestrator integrations that prefer
+     *      a small read helper over the generated public mapping accessor.
+     * @param ip The IP address to query.
+     */
+    function getThreatStatus(string memory ip) external view returns (Status) {
+        return threats[ip].status;
+    }
 }
