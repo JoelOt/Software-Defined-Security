@@ -31,6 +31,15 @@ class FederatedController(app_manager.RyuApp):
         self.datapaths = {}
         self.snort_ports = {}  # dpid -> port_no (discovered dynamically)
         
+        # Configure professional logging with millisecond timestamps for performance validation
+        import logging
+        log_format = '%(asctime)s.%(msecs)03d [%(levelname)s] [FederatedController] %(message)s'
+        formatter = logging.Formatter(log_format, datefmt='%H:%M:%S')
+        for handler in logging.root.handlers:
+            handler.setFormatter(formatter)
+        if not logging.root.handlers:
+            logging.basicConfig(level=logging.INFO, format=log_format, datefmt='%H:%M:%S')
+        
         self.logger.info("Initialized Controller for Domain Subnet: %s", LOCAL_SUBNET_PREFIX)
         
         # Telemetry state
@@ -212,7 +221,7 @@ class FederatedController(app_manager.RyuApp):
                     
                     threshold = int(os.environ.get('TELEMETRY_PPS_THRESHOLD', '500'))
                     if pps > threshold and ipv4_src not in self.dropped_ips:
-                        self.logger.warning("[TELEMETRY] Anomaly detected! %s is sending %.2f pps.", ipv4_src, pps)
+                        self.logger.warning("[STAGE 1: DETECTION] Volumetric anomaly! %s is sending %.2f pps (Threshold: %s).", ipv4_src, pps, threshold)
                         self._trigger_local_mitigation(datapath, ipv4_src)
                         
             self.flow_stats[dpid][ipv4_src] = (packet_count, current_time)
@@ -221,7 +230,7 @@ class FederatedController(app_manager.RyuApp):
         """
         Workflow Step 1 (Victim): Detects anomaly -> Pushes DROP -> Publishes 'Pending' to DLT.
         """
-        self.logger.info("[MITIGATION] Triggering immediate local DROP for %s", attacker_ip)
+        self.logger.info("[STAGE 2: MITIGATION] Enforcing immediate local DROP for %s and publishing to DLT.", attacker_ip)
         self.dropped_ips.add(attacker_ip)
         
         parser = datapath.ofproto_parser
@@ -276,7 +285,7 @@ class FederatedController(app_manager.RyuApp):
             self.logger.info("[SFC] IP %s is not in our domain. Ignoring event.", attacker_ip)
             return
             
-        self.logger.warning("[SFC] Attacker %s belongs to our domain! Triggering quarantine...", attacker_ip)
+        self.logger.warning("[STAGE 3: QUARANTINE] Attacker %s belongs to our domain! Tunneling to Snort VNF...", attacker_ip)
         
         for datapath in self.datapaths.values():
             dpid = datapath.id
@@ -304,7 +313,7 @@ class FederatedController(app_manager.RyuApp):
         Workflow Step 3 (Victim): Catches 'Quarantined' -> Deletes local DROP rule to resume operations.
         """
         if attacker_ip in self.dropped_ips:
-            self.logger.info("[RELEASE] Attacker %s successfully quarantined at source. Removing local DROP rule.", attacker_ip)
+            self.logger.info("[STAGE 4: RELEASE] Attacker %s quarantined at source. Removing local DROP rule.", attacker_ip)
             for datapath in self.datapaths.values():
                 ofproto = datapath.ofproto
                 parser = datapath.ofproto_parser

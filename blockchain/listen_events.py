@@ -8,6 +8,10 @@ Highly useful for debugging and live project demonstrations.
 import json
 import os
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from web3 import Web3
 
 def listen():

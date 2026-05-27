@@ -81,11 +81,11 @@ else
         exit 1
     fi
 
-    echo "[*] Checking for existing tunnel interface '$TUNNEL_NAME'..."
+    echo "[*] Cleaning up any legacy OS-level tunnel interfaces..."
     if ip link show "$TUNNEL_NAME" > /dev/null 2>&1; then
-        echo "[!] Tunnel interface '$TUNNEL_NAME' already exists. Recreating..."
-        ip link set "$TUNNEL_NAME" down
-        ip tunnel del "$TUNNEL_NAME"
+        echo "[!] Legacy OS tunnel interface '$TUNNEL_NAME' found. Deleting..."
+        ip link set "$TUNNEL_NAME" down || true
+        ip tunnel del "$TUNNEL_NAME" || true
     fi
 
     if ovs-vsctl list-ports "$LOCAL_OVS_SWITCH" | grep -q -w "$TUNNEL_NAME"; then
@@ -93,15 +93,10 @@ else
         ovs-vsctl del-port "$LOCAL_OVS_SWITCH" "$TUNNEL_NAME"
     fi
 
-    echo "[*] Creating GRE tunnel interface '$TUNNEL_NAME' from $LOCAL_VM_IP to $REMOTE_VM_IP..."
-    ip tunnel add "$TUNNEL_NAME" mode gre remote "$REMOTE_VM_IP" local "$LOCAL_VM_IP" ttl 255
+    echo "[*] Creating native OVS GRE tunnel '$TUNNEL_NAME' to $REMOTE_VM_IP..."
+    ovs-vsctl add-port "$LOCAL_OVS_SWITCH" "$TUNNEL_NAME" \
+        -- set interface "$TUNNEL_NAME" type=gre options:remote_ip="$REMOTE_VM_IP" options:local_ip="$LOCAL_VM_IP"
 
-    echo "[*] Bringing up the GRE tunnel interface '$TUNNEL_NAME'..."
-    ip link set "$TUNNEL_NAME" up
-
-    echo "[*] Attaching GRE tunnel interface '$TUNNEL_NAME' to Open vSwitch '$LOCAL_OVS_SWITCH'..."
-    ovs-vsctl add-port "$LOCAL_OVS_SWITCH" "$TUNNEL_NAME"
-
-    echo "[+] Successfully established GRE tunnel and attached it to $LOCAL_OVS_SWITCH."
+    echo "[+] Successfully established native GRE tunnel on $LOCAL_OVS_SWITCH."
     echo "=========================================="
 fi

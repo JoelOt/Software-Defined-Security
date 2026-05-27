@@ -12,6 +12,7 @@ botnet behavior, triggering the telemetry detection of the Ryu controller.
 import argparse
 import random
 import time
+import datetime
 from scapy.all import IP, UDP, Raw
 
 def main():
@@ -23,8 +24,11 @@ def main():
     target_ip = args.target
     target_port = args.port
     
-    print(f"[*] Starting UDP flood attack against {target_ip}:{target_port}")
-    print("[*] Press Ctrl+C to stop.")
+    def ts():
+        return datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
+
+    print(f"[{ts()}] [*] Starting UDP flood attack against {target_ip}:{target_port}")
+    print(f"[{ts()}] [*] Press Ctrl+C to stop.")
 
     import socket
     def get_local_ip():
@@ -38,7 +42,7 @@ def main():
             s.close()
             
     src_ip = get_local_ip()
-    print(f"[*] Source IP resolved as: {src_ip}")
+    print(f"[{ts()}] [*] Source IP resolved as: {src_ip}")
 
     # Payload for the UDP packets to add some volume
     payload = b"X" * 1024  # 1KB payload
@@ -69,10 +73,10 @@ def main():
             if packet_count % 1000 == 0:
                 elapsed_time = time.time() - start_time
                 pps = packet_count / elapsed_time
-                print(f"[+] Sent {packet_count} packets to {target_ip}:{target_port} (Rate: {pps:.2f} pps)")
+                print(f"[{ts()}] [+] Sent {packet_count} packets to {target_ip}:{target_port} (Rate: {pps:.2f} pps)")
 
     except KeyboardInterrupt:
-        print(f"\n[*] Attack stopped. Total packets sent: {packet_count}")
+        print(f"\n[{ts()}] [*] Attack stopped. Total packets sent: {packet_count}")
 
 if __name__ == "__main__":
     main()

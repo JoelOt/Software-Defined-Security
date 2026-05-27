@@ -28,6 +28,7 @@ federated-quarantine-sdn/
 │   ├── deploy.py                  # Deployment script (Web3.py)
 │   ├── start_geth.sh              # Automated Geth PoA node startup
 │   ├── stop_geth.sh               # Stop/clean the Geth node
+│   ├── listen_events.py           # Real-time event listener (debug/demo tool)
 │   ├── data/                      # Chain data & keystore (gitignored)
 │   └── contract_data.json         # Deployed address + ABI (gitignored)
 ├── sdn/
@@ -99,6 +100,12 @@ Deploy the Smart Contract:
 python3 blockchain/deploy.py
 # The deployment script automatically saves the address and ABI to blockchain/contract_data.json.
 # You can also manually add it to your .env file as CONTRACT_ADDRESS.
+```
+
+To monitor raw DLT events (ThreatReported and StatusUpdated) in real-time in a separate terminal:
+```bash
+# Terminal 3 (Optional)
+python3 blockchain/listen_events.py
 ```
 
 To stop or reset the blockchain:
